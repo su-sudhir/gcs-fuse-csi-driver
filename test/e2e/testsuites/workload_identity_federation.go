@@ -630,7 +630,12 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 	})
 
 	ginkgo.It("should fail GCS access when WI principal has no storage role", func() {
-		init(specs.SkipCSIBucketAccessCheckPrefix)
+		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
+		if isOSS {
+			init(specs.SkipCSIBucketAccessCheckPrefix)
+		} else {
+			init()
+		}		
 		defer cleanup()
 
 		const (
@@ -640,7 +645,6 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 			mountPath     = "/mnt/gcs"
 		)
 
-		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
 		var principal string
 		if isOSS {
 			principal, _ = setupOSSWIFPrincipal(wifKSA, wifWorkloadIdentityPoolID, wifWorkloadIdentityProviderID, configMapName)
@@ -667,7 +671,12 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 	})
 
 	ginkgo.It("should fail write operations when WI principal has read-only storage role", func() {
-		init(specs.SkipCSIBucketAccessCheckPrefix)
+		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
+		if isOSS {
+			init(specs.SkipCSIBucketAccessCheckPrefix)
+		} else {
+			init()
+		}
 		defer cleanup()
 
 		bucketName := l.volumeResource.VolSource.CSI.VolumeAttributes["bucketName"]
@@ -680,7 +689,6 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 			mountPath     = "/mnt/gcs"
 		)
 
-		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
 		var principal string
 		if isOSS {
 			principal, _ = setupOSSWIFPrincipal(wifKSA, wifWorkloadIdentityPoolID, wifWorkloadIdentityProviderID, configMapName)
@@ -714,7 +722,12 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 	})
 
 	ginkgo.It("should fail GCS access when WI principal role is on a different bucket", func() {
-		init(specs.SkipCSIBucketAccessCheckPrefix)
+		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
+		if isOSS {
+			init(specs.SkipCSIBucketAccessCheckPrefix)
+		} else {
+			init()
+		}		
 		defer cleanup()
 
 		bucketName := l.volumeResource.VolSource.CSI.VolumeAttributes["bucketName"]
@@ -727,7 +740,6 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 			mountPath     = "/mnt/gcs"
 		)
 
-		isOSS := os.Getenv(utils.IsOSSEnvVar) == "true"
 		rawProjectID := os.Getenv(utils.ProjectEnvVar)
 		lines := strings.Split(strings.TrimSpace(rawProjectID), "\n")
 		projectID := lines[len(lines)-1]
