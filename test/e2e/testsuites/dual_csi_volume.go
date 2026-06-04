@@ -85,6 +85,10 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 	init := func() {
 		l = local{}
 		l.config = driver.PrepareTest(ctx, f)
+		// Skip the CSI pre-mount bucket access check so the test works on
+		// OSS clusters where the test pod has no credential configmap annotation.
+		// The WIF IAM binding on the bucket still grants real GCSFuse access.
+		l.config.Prefix = specs.SkipCSIBucketAccessCheckPrefix
 		l.gcsFuseResource = storageframework.CreateVolumeResource(ctx, driver, l.config, pattern, e2evolume.SizeRange{})
 	}
 
