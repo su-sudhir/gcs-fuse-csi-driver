@@ -167,11 +167,11 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 				pdMountPath, pdMountPath))
 
 		ginkgo.By("Verifying the GCS file is not visible on the PD mount")
-		tPod.VerifyExecInPodFail(f, specs.TesterContainerName,
-			fmt.Sprintf("test -f %v/gcs-test.txt", pdMountPath), 1)
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test ! -f %v/gcs-test.txt", pdMountPath))
 
 		ginkgo.By("Verifying the PD file is not visible on the GCS Fuse mount")
-		tPod.VerifyExecInPodFail(f, specs.TesterContainerName,
-			fmt.Sprintf("test -f %v/pd-test.txt", gcsFuseMountPath), 1)
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test ! -f %v/pd-test.txt", gcsFuseMountPath))
 	})
 }
