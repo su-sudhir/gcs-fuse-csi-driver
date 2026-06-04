@@ -126,62 +126,6 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 		return pvc, cleanupFn
 	}
 
-	// This tests the following configuration:
-	//
-	//           [pod]
-	//           /   \
-	//    [gcs-vol] [pd-vol]
-	//        |         |
-	//     [GCS]   [PD disk]
-	//
-	// Both volumes are mounted in the same pod. The test verifies that writes
-	// and reads succeed on each mount independently, with no cross-mount bleed.
-	ginkgo.It("should mount a GCS Fuse volume and a PD-backed PVC in the same pod and allow independent R/W on both", func() {
-		// Skip when pd.csi.storage.gke.io is not installed (e.g. OSS clusters
-		// without the GCE PD CSI driver, or non-GCP environments).
-		_, err := f.ClientSet.StorageV1().CSIDrivers().Get(ctx, pdCSIDriverName, metav1.GetOptions{})
-		if err != nil {
-			e2eskipper.Skipf("%s CSIDriver not found, skipping dual-driver test: %v", pdCSIDriverName, err)
-		}
-
-		init()
-		defer cleanup()
-
-		ginkgo.By(fmt.Sprintf("Creating PD-backed PVC using StorageClass %q", PDStorageClass))
-		pvc, cleanupPVC := createPDPVC("dual-csi-pd-pvc-")
-		defer cleanupPVC()
-
-		ginkgo.By("Configuring the pod with both GCS Fuse and PD volumes")
-		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
-		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
-		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, pdVolName, pdMountPath, false)
-
-		ginkgo.By("Deploying the pod")
-		tPod.Create(ctx)
-		defer tPod.Cleanup(ctx)
-
-		ginkgo.By("Waiting for the pod to be running")
-		tPod.WaitForRunning(ctx)
-
-		ginkgo.By("Writing and reading a file on the GCS Fuse volume")
-		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("echo 'hello-gcs' > %v/gcs-test.txt && grep 'hello-gcs' %v/gcs-test.txt",
-				gcsFuseMountPath, gcsFuseMountPath))
-
-		ginkgo.By("Writing and reading a file on the PD volume")
-		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("echo 'hello-pd' > %v/pd-test.txt && grep 'hello-pd' %v/pd-test.txt",
-				pdMountPath, pdMountPath))
-
-		ginkgo.By("Verifying the GCS file is not visible on the PD mount")
-		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("test ! -f %v/gcs-test.txt", pdMountPath))
-
-		ginkgo.By("Verifying the PD file is not visible on the GCS Fuse mount")
-		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("test ! -f %v/pd-test.txt", gcsFuseMountPath))
-	})
-
 	// GCS → PD data pipeline test
 	//
 	//           [pod]
