@@ -50,6 +50,7 @@ var (
 	zbFlag           = flag.Bool("enable-zb", false, "use GCS Zonal Buckets for the tests")
 	profilesFlag     = flag.Bool("enable-gcsfuse-profiles-test", false, "enable gcsfuse profiles for the tests")
 	kernelParamsFlag = flag.Bool("enable-gcsfuse-kernel-params-test", false, "enable kernel params for the tests")
+	pdStorageClass   = flag.String("pd-storage-class", "standard-rwo", "StorageClass for PD-backed PVC in dual CSI volume tests")
 )
 
 var _ = func() bool {
@@ -87,6 +88,7 @@ var _ = func() bool {
 	}
 
 	testsuites.GCSFuseVersionStr = specs.GetGCSFuseVersion()
+	testsuites.PDStorageClass = *pdStorageClass
 	return true
 }()
 
@@ -127,6 +129,7 @@ var _ = ginkgo.Describe("E2E Test Suite", func() {
 			testsuites.InitGcsFuseCSIOIDCTestSuite,
 			testsuites.InitGcsFuseCSICloudProfilerTestSuite,
 			testsuites.InitGcsFuseCSIWorkloadIdentityFederationTestSuite,
+			testsuites.InitGcsFuseCSIDualCSIVolumeTestSuite,
 		}
 
 		if *profilesFlag {
