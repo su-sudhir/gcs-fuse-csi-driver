@@ -40,16 +40,20 @@ import (
 )
 
 var (
-	err              error
-	c                clientset.Interface
-	m                metadata.Service
-	clientProtocol   = flag.String("client-protocol", "http", "the test bucket location")
-	bucketLocation   = flag.String("test-bucket-location", "us-central1", "the test bucket location")
-	skipGcpSaTest    = flag.Bool("skip-gcp-sa-test", true, "skip GCP SA test")
-	apiEnv           = flag.String("api-env", "prod", "cluster API env")
-	zbFlag           = flag.Bool("enable-zb", false, "use GCS Zonal Buckets for the tests")
-	profilesFlag     = flag.Bool("enable-gcsfuse-profiles-test", false, "enable gcsfuse profiles for the tests")
-	kernelParamsFlag = flag.Bool("enable-gcsfuse-kernel-params-test", false, "enable kernel params for the tests")
+	err                error
+	c                  clientset.Interface
+	m                  metadata.Service
+	clientProtocol     = flag.String("client-protocol", "http", "the test bucket location")
+	bucketLocation     = flag.String("test-bucket-location", "us-central1", "the test bucket location")
+	skipGcpSaTest      = flag.Bool("skip-gcp-sa-test", true, "skip GCP SA test")
+	apiEnv             = flag.String("api-env", "prod", "cluster API env")
+	zbFlag             = flag.Bool("enable-zb", false, "use GCS Zonal Buckets for the tests")
+	profilesFlag       = flag.Bool("enable-gcsfuse-profiles-test", false, "enable gcsfuse profiles for the tests")
+	kernelParamsFlag   = flag.Bool("enable-gcsfuse-kernel-params-test", false, "enable kernel params for the tests")
+	lustreVolumeHandle = flag.String("lustre-volume-handle", "", "volumeHandle (project/location/instance) of a pre-provisioned Managed Lustre instance for Lustre + GCS Fuse dual volume tests; if unset, those tests are skipped")
+	lustreIP           = flag.String("lustre-ip", "", "IP address of the pre-provisioned Managed Lustre instance")
+	lustreFilesystem   = flag.String("lustre-filesystem", "", "filesystem name of the pre-provisioned Managed Lustre instance")
+	lustreCapacity     = flag.String("lustre-capacity", "100Gi", "capacity of the pre-provisioned Managed Lustre instance, used to size the static PV/PVC")
 )
 
 var _ = func() bool {
@@ -87,6 +91,10 @@ var _ = func() bool {
 	}
 
 	testsuites.GCSFuseVersionStr = specs.GetGCSFuseVersion()
+	testsuites.LustreVolumeHandle = *lustreVolumeHandle
+	testsuites.LustreIP = *lustreIP
+	testsuites.LustreFilesystem = *lustreFilesystem
+	testsuites.LustreCapacity = *lustreCapacity
 	return true
 }()
 
@@ -127,6 +135,7 @@ var _ = ginkgo.Describe("E2E Test Suite", func() {
 			testsuites.InitGcsFuseCSIOIDCTestSuite,
 			testsuites.InitGcsFuseCSICloudProfilerTestSuite,
 			testsuites.InitGcsFuseCSIWorkloadIdentityFederationTestSuite,
+			testsuites.InitGcsFuseCSILustreDualVolumeTestSuite,
 		}
 
 		if *profilesFlag {
