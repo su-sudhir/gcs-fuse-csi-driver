@@ -23,8 +23,10 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
@@ -347,6 +349,84 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 			fmt.Sprintf("grep 'persistent-gcs' %v/persist.txt", gcsFuseMountPath))
 	})
 
+	// Node drain / reschedule remount: after draining the node running the
+	// dual-mount pod, a replacement pod on a different node must remount both
+	// volumes and find the data intact.
+	ginkgo.It("should remount both Lustre PVC and GCS Fuse volume with data intact after the node is drained", func() {
+		skipIfLustreNotAvailable("node drain remount test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a statically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVPVC()
+		defer cleanupPVC()
+
+		ginkgo.By("Creating the dual-mount pod and waiting for it to run")
+		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod1.Create(ctx)
+		tPod1.WaitForRunning(ctx)
+
+		nodeName := tPod1.GetNode()
+		framework.Logf("Pod-1 scheduled on node %s", nodeName)
+
+		ginkgo.By("Writing data to both volumes from Pod-1")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'drain-lustre' > %v/drain.txt", lustreMountPath))
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'drain-gcs' > %v/drain.txt", gcsFuseMountPath))
+
+		ginkgo.By(fmt.Sprintf("Cordoning node %s", nodeName))
+		cordonPatch := []byte(`{"spec":{"unschedulable":true}}`)
+		_, err := f.ClientSet.CoreV1().Nodes().Patch(ctx, nodeName, types.MergePatchType, cordonPatch, metav1.PatchOptions{})
+		framework.ExpectNoError(err)
+		defer func() {
+			ginkgo.By(fmt.Sprintf("Uncordoning node %s", nodeName))
+			uncordonPatch := []byte(`{"spec":{"unschedulable":false}}`)
+			_, patchErr := f.ClientSet.CoreV1().Nodes().Patch(ctx, nodeName, types.MergePatchType, uncordonPatch, metav1.PatchOptions{})
+			framework.ExpectNoError(patchErr)
+		}()
+
+		ginkgo.By(fmt.Sprintf("Evicting Pod-1 from node %s", nodeName))
+		eviction := &policyv1.Eviction{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tPod1.GetPodName(),
+				Namespace: tPod1.GetPodNamespace(),
+			},
+		}
+		err = f.ClientSet.PolicyV1().Evictions(tPod1.GetPodNamespace()).Evict(ctx, eviction)
+		framework.ExpectNoError(err)
+
+		ginkgo.By("Waiting for Pod-1 to be fully removed")
+		tPod1.WaitForPodNotFoundInNamespace(ctx)
+
+		ginkgo.By("Creating Pod-2 with anti-affinity for the drained node")
+		tPod2 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod2.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod2.SetNodeAffinity(nodeName, false)
+		tPod2.Create(ctx)
+		defer tPod2.Cleanup(ctx)
+		tPod2.WaitForRunning(ctx)
+
+		framework.Logf("Pod-2 rescheduled on node %s", tPod2.GetNode())
+
+		ginkgo.By("Verifying Lustre data is intact on the new node")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'drain-lustre' %v/drain.txt", lustreMountPath))
+
+		ginkgo.By("Verifying GCS Fuse data is intact on the new node")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'drain-gcs' %v/drain.txt", gcsFuseMountPath))
+
+		ginkgo.By("Verifying both mounts are functional on the new node")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", lustreMountPath))
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+	})
 }
 
 func ptrVolumeMode(m corev1.PersistentVolumeMode) *corev1.PersistentVolumeMode {
