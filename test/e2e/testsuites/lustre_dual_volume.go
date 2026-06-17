@@ -243,6 +243,65 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 			fmt.Sprintf("echo 'gcs-fuse-data-2' >> %v/gcs-data.txt && echo 'lustre-data-2' >> %v/lustre-data.txt",
 				gcsFuseMountPath, lustreMountPath))
 	})
+
+	// Multi-pod shared RWX: two pods mount the same Lustre PVC (RWX) and the
+	// same GCS Fuse bucket (RWX) concurrently. Pod-1 writes a dataset shard to
+	// Lustre and a manifest to GCS; Pod-2 must see both files immediately.
+	ginkgo.It("should allow two pods to share the same Lustre PVC (RWX) and GCS Fuse bucket (RWX) and see each other's writes", func() {
+		skipIfLustreNotAvailable("multi-pod shared RWX test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a statically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVPVC()
+		defer cleanupPVC()
+
+		ginkgo.By("Creating Pod-1 with both volumes")
+		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod1.Create(ctx)
+		defer tPod1.Cleanup(ctx)
+		tPod1.WaitForRunning(ctx)
+
+		ginkgo.By("Pod-1 writes a shard to Lustre and a manifest to GCS")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'shard-data' > %v/shard.txt", lustreMountPath))
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'manifest-data' > %v/manifest.txt", gcsFuseMountPath))
+
+		ginkgo.By("Creating Pod-2 mounting the same Lustre PVC and GCS bucket")
+		tPod2 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod2.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod2.Create(ctx)
+		defer tPod2.Cleanup(ctx)
+		tPod2.WaitForRunning(ctx)
+
+		ginkgo.By("Pod-2 sees the shard written by Pod-1 on the Lustre mount")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'shard-data' %v/shard.txt", lustreMountPath))
+
+		ginkgo.By("Pod-2 sees the manifest written by Pod-1 on the GCS Fuse mount")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'manifest-data' %v/manifest.txt", gcsFuseMountPath))
+
+		ginkgo.By("Pod-2 writes back to both volumes")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'pod2-shard' > %v/pod2-shard.txt", lustreMountPath))
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'pod2-manifest' > %v/pod2-manifest.txt", gcsFuseMountPath))
+
+		ginkgo.By("Pod-1 sees the files written by Pod-2 on the Lustre mount")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'pod2-shard' %v/pod2-shard.txt", lustreMountPath))
+
+		ginkgo.By("Pod-1 sees the files written by Pod-2 on the GCS Fuse mount")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'pod2-manifest' %v/pod2-manifest.txt", gcsFuseMountPath))
+	})
+
 }
 
 func ptrVolumeMode(m corev1.PersistentVolumeMode) *corev1.PersistentVolumeMode {
