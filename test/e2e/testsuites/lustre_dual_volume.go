@@ -302,6 +302,51 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 			fmt.Sprintf("grep 'pod2-manifest' %v/pod2-manifest.txt", gcsFuseMountPath))
 	})
 
+	// Pod restart + persistence: data written to both volumes in Pod-1 survives
+	// a pod deletion and is fully readable in a fresh Pod-2 that binds the same
+	// Lustre PVC and GCS bucket.
+	ginkgo.It("should persist data on both Lustre PVC and GCS Fuse volume across a pod restart", func() {
+		skipIfLustreNotAvailable("pod restart persistence test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a statically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVPVC()
+		defer cleanupPVC()
+
+		ginkgo.By("Creating Pod-1 and writing data to both volumes")
+		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod1.Create(ctx)
+		tPod1.WaitForRunning(ctx)
+
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'persistent-lustre' > %v/persist.txt", lustreMountPath))
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'persistent-gcs' > %v/persist.txt", gcsFuseMountPath))
+
+		ginkgo.By("Deleting Pod-1")
+		tPod1.Cleanup(ctx)
+
+		ginkgo.By("Creating Pod-2 mounting the same Lustre PVC and GCS bucket")
+		tPod2 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod2.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod2.Create(ctx)
+		defer tPod2.Cleanup(ctx)
+		tPod2.WaitForRunning(ctx)
+
+		ginkgo.By("Verifying Lustre data persisted in Pod-2")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'persistent-lustre' %v/persist.txt", lustreMountPath))
+
+		ginkgo.By("Verifying GCS Fuse data persisted in Pod-2")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'persistent-gcs' %v/persist.txt", gcsFuseMountPath))
+	})
+
 }
 
 func ptrVolumeMode(m corev1.PersistentVolumeMode) *corev1.PersistentVolumeMode {
