@@ -123,17 +123,21 @@ func (t *gcsFuseCSIOIDCTestSuite) DefineTests(driver storageframework.TestDriver
 		projectNumber := getProjectNumber(projectID)
 		gomega.Expect(projectNumber).NotTo(gomega.BeEmpty(), "Failed to get project number")
 
-		ginkgo.By("Getting cluster information")
-		clusterName := os.Getenv(utils.ClusterNameEnvVar)
-		clusterLocation := os.Getenv(utils.ClusterLocationEnvVar)
-		gomega.Expect(clusterName).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterNameEnvVar))
-		gomega.Expect(clusterLocation).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterLocationEnvVar))
+		ginkgo.By("Getting cluster OIDC issuer URL")
+		var clusterIssuer string
+		if os.Getenv(utils.IsOSSEnvVar) == "true" {
+			clusterIssuer = os.Getenv(utils.OIDCIssuerEnvVar)
+			gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set for OSS clusters", utils.OIDCIssuerEnvVar))
+		} else {
+			clusterName := os.Getenv(utils.ClusterNameEnvVar)
+			clusterLocation := os.Getenv(utils.ClusterLocationEnvVar)
+			gomega.Expect(clusterName).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterNameEnvVar))
+			gomega.Expect(clusterLocation).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterLocationEnvVar))
+			clusterIssuer = getClusterOIDCIssuer(clusterName, clusterLocation, projectID)
+			gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), "Failed to get cluster OIDC issuer")
+		}
 		ginkgo.By(fmt.Sprintf("Creating workload identity pool: %s", oidcWorkloadIdentityPoolID))
 		createWorkloadIdentityPool(projectID, oidcWorkloadIdentityPoolID)
-
-		ginkgo.By("Getting cluster OIDC issuer URL")
-		clusterIssuer := getClusterOIDCIssuer(clusterName, clusterLocation, projectID)
-		gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), "Failed to get cluster OIDC issuer")
 
 		ginkgo.By(fmt.Sprintf("Creating workload identity provider: %s", oidcWorkloadIdentityProviderID))
 		createWorkloadIdentityProvider(projectID, oidcWorkloadIdentityPoolID, oidcWorkloadIdentityProviderID, clusterIssuer)
