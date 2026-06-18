@@ -415,6 +415,9 @@ func (t *gcsFuseCSIOIDCTestSuite) DefineTests(driver storageframework.TestDriver
 		tPod.Create(ctx)
 		defer tPod.Cleanup(ctx)
 
+		ginkgo.By("Checking that the pod is running")
+		tPod.WaitForRunning(ctx)
+
 		ginkgo.By("Checking that the gcsfuse sidecar logs a credential issuer connection error")
 		tPod.WaitForLog(ctx, webhook.GcsFuseSidecarName, "Error connecting to the given credential's issuer")
 	}
@@ -450,6 +453,9 @@ func (t *gcsFuseCSIOIDCTestSuite) DefineTests(driver storageframework.TestDriver
 		ginkgo.By("Deploying test pod")
 		tPod.Create(ctx)
 		defer tPod.Cleanup(ctx)
+
+		ginkgo.By("Checking that the pod is running")
+		tPod.WaitForRunning(ctx)
 
 		ginkgo.By("Checking that the gcsfuse sidecar logs an invalid_target error")
 		tPod.WaitForLog(ctx, webhook.GcsFuseSidecarName, "invalid_target")
