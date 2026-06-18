@@ -35,18 +35,11 @@ import (
 	"local/test/e2e/specs"
 )
 
-// The following vars describe a pre-provisioned Managed Lustre instance used
-// by the Lustre + GCS Fuse dual CSI volume tests. They are overridden via
-// --lustre-volume-handle, --lustre-ip, --lustre-filesystem, and
-// --lustre-capacity in e2e_test.go. If LustreVolumeHandle is empty, the
-// dual-volume Lustre tests are skipped (e.g. on clusters without a Lustre
-// instance provisioned).
-var (
-	LustreVolumeHandle string
-	LustreIP           string
-	LustreFilesystem   string
-	LustreCapacity     = "100Gi"
-)
+// LustreStorageClass is the StorageClass used to dynamically provision
+// Lustre-backed PVCs in the dual-volume tests. Overridden via
+// --lustre-storage-class in e2e_test.go. If empty, the Lustre tests are
+// skipped.
+var LustreStorageClass = "lustre-rwx"
 
 const (
 	lustreCSIDriverName = "lustre.csi.storage.gke.io"
@@ -54,6 +47,7 @@ const (
 	lustreVolName       = "lustre-vol"
 	gcsFuseMountPath    = "/mnt/gcs"
 	gcsFuseVolName      = "gcs-vol"
+	lustrePVCSize       = "9000Gi"
 )
 
 type gcsFuseCSILustreDualVolumeTestSuite struct {
@@ -66,9 +60,6 @@ func InitGcsFuseCSILustreDualVolumeTestSuite() storageframework.TestSuite {
 	return &gcsFuseCSILustreDualVolumeTestSuite{
 		tsInfo: storageframework.TestSuiteInfo{
 			Name: "lustre-dual-csi-volume",
-			// PreprovisionedPV only: the Lustre PV/PVC are statically bound to a
-			// pre-existing Managed Lustre instance, independent of the
-			// storageframework volume pattern.
 			TestPatterns: []storageframework.TestPattern{
 				storageframework.DefaultFsPreprovisionedPV,
 			},
@@ -97,9 +88,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 	init := func() {
 		l = local{}
 		l.config = driver.PrepareTest(ctx, f)
-		// Skip the CSI pre-mount bucket access check so the test works on
-		// OSS clusters where the test pod has no credential configmap annotation.
-		// The WIF IAM binding on the bucket still grants real GCSFuse access.
 		l.config.Prefix = specs.SkipCSIBucketAccessCheckPrefix
 		l.gcsFuseResource = storageframework.CreateVolumeResource(ctx, driver, l.config, pattern, e2evolume.SizeRange{})
 	}
@@ -110,81 +98,41 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		}
 	}
 
-	// skipIfLustreNotAvailable skips the test when no pre-provisioned Lustre
-	// instance has been configured, or the Lustre CSIDriver is not installed
-	// on the cluster.
+	// skipIfLustreNotAvailable skips the test when the Lustre CSIDriver is not
+	// installed on the cluster or no StorageClass is configured.
 	skipIfLustreNotAvailable := func(testName string) {
-		if LustreVolumeHandle == "" {
-			e2eskipper.Skipf("--lustre-volume-handle not set, skipping %s", testName)
+		if LustreStorageClass == "" {
+			e2eskipper.Skipf("--lustre-storage-class not set, skipping %s", testName)
 		}
 		if _, err := f.ClientSet.StorageV1().CSIDrivers().Get(ctx, lustreCSIDriverName, metav1.GetOptions{}); err != nil {
 			e2eskipper.Skipf("%s CSIDriver not found, skipping %s: %v", lustreCSIDriverName, testName, err)
 		}
 	}
 
-	// createLustrePVPVC statically provisions a PV/PVC pair bound to the
-	// pre-existing Managed Lustre instance described by LustreVolumeHandle,
-	// LustreIP, and LustreFilesystem. Returns the PVC and a cleanup func that
-	// deletes both the PVC and the PV.
-	createLustrePVPVC := func() (*corev1.PersistentVolumeClaim, func()) {
-		capacity := resource.MustParse(LustreCapacity)
-		pvcName := "lustre-pvc-" + f.Namespace.Name
-
-		pv := &corev1.PersistentVolume{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "lustre-pv-",
-			},
-			Spec: corev1.PersistentVolumeSpec{
-				Capacity: corev1.ResourceList{
-					corev1.ResourceStorage: capacity,
-				},
-				AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
-				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-				VolumeMode:                    ptrVolumeMode(corev1.PersistentVolumeFilesystem),
-				ClaimRef: &corev1.ObjectReference{
-					Namespace: f.Namespace.Name,
-					Name:      pvcName,
-				},
-				PersistentVolumeSource: corev1.PersistentVolumeSource{
-					CSI: &corev1.CSIPersistentVolumeSource{
-						Driver:       lustreCSIDriverName,
-						VolumeHandle: LustreVolumeHandle,
-						VolumeAttributes: map[string]string{
-							"ip":         LustreIP,
-							"filesystem": LustreFilesystem,
-						},
-					},
-				},
-			},
-		}
-		pv, err := f.ClientSet.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
-		framework.ExpectNoError(err)
-
-		scName := ""
+	// createLustrePVC dynamically provisions a Lustre-backed PVC via
+	// LustreStorageClass and returns it with a cleanup func.
+	createLustrePVC := func(namePrefix string) (*corev1.PersistentVolumeClaim, func()) {
+		scName := LustreStorageClass
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      pvcName,
-				Namespace: f.Namespace.Name,
+				GenerateName: namePrefix,
+				Namespace:    f.Namespace.Name,
 			},
 			Spec: corev1.PersistentVolumeClaimSpec{
 				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 				StorageClassName: &scName,
-				VolumeName:       pv.Name,
 				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: capacity,
+						corev1.ResourceStorage: resource.MustParse(lustrePVCSize),
 					},
 				},
 			},
 		}
-		pvc, err = f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Create(ctx, pvc, metav1.CreateOptions{})
+		pvc, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Create(ctx, pvc, metav1.CreateOptions{})
 		framework.ExpectNoError(err)
-
 		return pvc, func() {
 			framework.ExpectNoError(f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Delete(
 				ctx, pvc.Name, metav1.DeleteOptions{}))
-			framework.ExpectNoError(f.ClientSet.CoreV1().PersistentVolumes().Delete(
-				ctx, pv.Name, metav1.DeleteOptions{}))
 		}
 	}
 
@@ -198,8 +146,8 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		init()
 		defer cleanup()
 
-		ginkgo.By("Creating a statically provisioned PVC bound to the pre-existing Lustre instance")
-		pvc, cleanupPVC := createLustrePVPVC()
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-dual-pvc-")
 		defer cleanupPVC()
 
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
@@ -255,8 +203,8 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		init()
 		defer cleanup()
 
-		ginkgo.By("Creating a statically provisioned Lustre PVC")
-		pvc, cleanupPVC := createLustrePVPVC()
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-rwx-pvc-")
 		defer cleanupPVC()
 
 		ginkgo.By("Creating Pod-1 with both volumes")
@@ -313,8 +261,8 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		init()
 		defer cleanup()
 
-		ginkgo.By("Creating a statically provisioned Lustre PVC")
-		pvc, cleanupPVC := createLustrePVPVC()
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-persist-pvc-")
 		defer cleanupPVC()
 
 		ginkgo.By("Creating Pod-1 and writing data to both volumes")
@@ -358,8 +306,8 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		init()
 		defer cleanup()
 
-		ginkgo.By("Creating a statically provisioned Lustre PVC")
-		pvc, cleanupPVC := createLustrePVPVC()
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-drain-pvc-")
 		defer cleanupPVC()
 
 		ginkgo.By("Creating the dual-mount pod and waiting for it to run")
@@ -427,8 +375,118 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
 			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
 	})
-}
 
-func ptrVolumeMode(m corev1.PersistentVolumeMode) *corev1.PersistentVolumeMode {
-	return &m
+	// Large file / high-throughput transfer: writes a 1 GB file on Lustre,
+	// copies it to GCS Fuse and back, verifies checksums match in both
+	// directions, and confirms both mounts remain stable throughout.
+	ginkgo.It("should transfer a 1GB file between Lustre and GCS Fuse mounts with matching checksums and no mount instability", func() {
+		skipIfLustreNotAvailable("large file high-throughput transfer test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-largefile-pvc-")
+		defer cleanupPVC()
+
+		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
+		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod.Create(ctx)
+		defer tPod.Cleanup(ctx)
+		tPod.WaitForRunning(ctx)
+
+		ginkgo.By("Writing a 1 GB file to the Lustre mount")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("dd if=/dev/urandom of=%v/large.bin bs=1M count=1024 conv=fsync", lustreMountPath))
+
+		ginkgo.By("Computing checksum of the source file on Lustre")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("md5sum %v/large.bin > /tmp/lustre.md5", lustreMountPath))
+
+		ginkgo.By("Copying the 1 GB file from Lustre to GCS Fuse")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("cp %v/large.bin %v/large.bin", lustreMountPath, gcsFuseMountPath))
+
+		ginkgo.By("Verifying the checksum of the file on GCS Fuse matches the Lustre source")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf(
+				"md5sum %v/large.bin > /tmp/gcs.md5 && "+
+					"LUSTRE_SUM=$(awk '{print $1}' /tmp/lustre.md5) && "+
+					"GCS_SUM=$(awk '{print $1}' /tmp/gcs.md5) && "+
+					"[ \"$LUSTRE_SUM\" = \"$GCS_SUM\" ]",
+				gcsFuseMountPath))
+
+		ginkgo.By("Copying the file back from GCS Fuse to Lustre")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("cp %v/large.bin %v/large-from-gcs.bin", gcsFuseMountPath, lustreMountPath))
+
+		ginkgo.By("Verifying the round-trip checksum matches the original")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf(
+				"md5sum %v/large-from-gcs.bin > /tmp/back.md5 && "+
+					"LUSTRE_SUM=$(awk '{print $1}' /tmp/lustre.md5) && "+
+					"BACK_SUM=$(awk '{print $1}' /tmp/back.md5) && "+
+					"[ \"$LUSTRE_SUM\" = \"$BACK_SUM\" ]",
+				lustreMountPath))
+
+		ginkgo.By("Verifying both mounts remain stable after large transfers")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", lustreMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+	})
+
+	// Mixed I/O pattern: many small-file reads/writes on GCS Fuse run
+	// concurrently with sequential large-file I/O on Lustre. Verifies no
+	// cross-driver resource contention and that both mounts remain healthy.
+	ginkgo.It("should handle concurrent small-file I/O on GCS Fuse and sequential large-file I/O on Lustre without contention", func() {
+		skipIfLustreNotAvailable("mixed I/O pattern test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-mixedio-pvc-")
+		defer cleanupPVC()
+
+		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
+		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod.Create(ctx)
+		defer tPod.Cleanup(ctx)
+		tPod.WaitForRunning(ctx)
+
+		ginkgo.By("Running concurrent GCS Fuse small-file writes and Lustre sequential large-file I/O")
+		// Launches 100 small-file writes to GCS Fuse in the background while
+		// simultaneously performing a 512 MB sequential write + read on Lustre,
+		// then waits for the GCS workload to finish before asserting exit codes.
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf(
+				"bash -c 'set -e; "+
+					"for i in $(seq 1 100); do echo \"small-${i}\" > %v/small-${i}.txt; done & GCS_PID=$!; "+
+					"dd if=/dev/zero of=%v/seq.bin bs=1M count=512 conv=fsync; "+
+					"dd if=%v/seq.bin of=/dev/null bs=1M; "+
+					"wait $GCS_PID'",
+				gcsFuseMountPath, lustreMountPath, lustreMountPath))
+
+		ginkgo.By("Verifying a sample of small files written to GCS Fuse are readable")
+		for _, i := range []int{1, 25, 50, 75, 100} {
+			tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+				fmt.Sprintf("grep 'small-%d' %v/small-%d.txt", i, gcsFuseMountPath, i))
+		}
+
+		ginkgo.By("Verifying the sequential Lustre file is intact")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test -f %v/seq.bin && stat -c%%s %v/seq.bin | grep -q 536870912",
+				lustreMountPath, lustreMountPath))
+
+		ginkgo.By("Verifying both mounts remain healthy after mixed I/O")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", lustreMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+	})
 }

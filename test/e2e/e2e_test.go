@@ -50,10 +50,7 @@ var (
 	zbFlag             = flag.Bool("enable-zb", false, "use GCS Zonal Buckets for the tests")
 	profilesFlag       = flag.Bool("enable-gcsfuse-profiles-test", false, "enable gcsfuse profiles for the tests")
 	kernelParamsFlag   = flag.Bool("enable-gcsfuse-kernel-params-test", false, "enable kernel params for the tests")
-	lustreVolumeHandle = flag.String("lustre-volume-handle", "", "volumeHandle (project/location/instance) of a pre-provisioned Managed Lustre instance for Lustre + GCS Fuse dual volume tests; if unset, those tests are skipped")
-	lustreIP           = flag.String("lustre-ip", "", "IP address of the pre-provisioned Managed Lustre instance")
-	lustreFilesystem   = flag.String("lustre-filesystem", "", "filesystem name of the pre-provisioned Managed Lustre instance")
-	lustreCapacity     = flag.String("lustre-capacity", "100Gi", "capacity of the pre-provisioned Managed Lustre instance, used to size the static PV/PVC")
+	lustreStorageClass = flag.String("lustre-storage-class", "lustre-rwx", "StorageClass used to dynamically provision Lustre PVCs in dual-volume tests; if empty, those tests are skipped")
 )
 
 var _ = func() bool {
@@ -91,10 +88,7 @@ var _ = func() bool {
 	}
 
 	testsuites.GCSFuseVersionStr = specs.GetGCSFuseVersion()
-	testsuites.LustreVolumeHandle = *lustreVolumeHandle
-	testsuites.LustreIP = *lustreIP
-	testsuites.LustreFilesystem = *lustreFilesystem
-	testsuites.LustreCapacity = *lustreCapacity
+	testsuites.LustreStorageClass = *lustreStorageClass
 	return true
 }()
 
