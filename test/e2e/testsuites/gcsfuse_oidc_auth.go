@@ -415,8 +415,11 @@ func (t *gcsFuseCSIOIDCTestSuite) DefineTests(driver storageframework.TestDriver
 		tPod.Create(ctx)
 		defer tPod.Cleanup(ctx)
 
-		ginkgo.By("Checking that the mount fails with a credential issuer connection error")
-		tPod.WaitForFailedMountError(ctx, "Error connecting to the given credential's issuer")
+		ginkgo.By("Waiting for gcsfuse sidecar to start")
+		tPod.WaitForContainerRunning(ctx, webhook.GcsFuseSidecarName)
+
+		ginkgo.By("Checking that the gcsfuse sidecar logs a credential issuer connection error")
+		tPod.WaitForLog(ctx, webhook.GcsFuseSidecarName, "Error connecting to the given credential's issuer")
 	}
 
 	// testCaseOIDCNonExistentProvider uses a credential config that points to a pool and
@@ -451,8 +454,11 @@ func (t *gcsFuseCSIOIDCTestSuite) DefineTests(driver storageframework.TestDriver
 		tPod.Create(ctx)
 		defer tPod.Cleanup(ctx)
 
-		ginkgo.By("Checking that the mount fails with an invalid_target error")
-		tPod.WaitForFailedMountError(ctx, "invalid_target")
+		ginkgo.By("Waiting for gcsfuse sidecar to start")
+		tPod.WaitForContainerRunning(ctx, webhook.GcsFuseSidecarName)
+
+		ginkgo.By("Checking that the gcsfuse sidecar logs an invalid_target error")
+		tPod.WaitForLog(ctx, webhook.GcsFuseSidecarName, "invalid_target")
 	}
 
 	ginkgo.It("[Feature: OIDC] should successfully mount with OIDC authentication", func() {
