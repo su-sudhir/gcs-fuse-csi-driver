@@ -119,12 +119,18 @@ func (t *gcsFuseCSIWorkloadIdentityFederationTestSuite) DefineTests(driver stora
 		createWorkloadIdentityPool(projectID, poolID)
 
 		ginkgo.By("Getting cluster OIDC issuer URL")
-		clusterName := os.Getenv(utils.ClusterNameEnvVar)
-		clusterLocation := os.Getenv(utils.ClusterLocationEnvVar)
-		gomega.Expect(clusterName).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterNameEnvVar))
-		gomega.Expect(clusterLocation).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterLocationEnvVar))
-		clusterIssuer := getClusterOIDCIssuer(clusterName, clusterLocation, projectID)
-		gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), "failed to get cluster OIDC issuer")
+		var clusterIssuer string
+		if os.Getenv(utils.IsOSSEnvVar) == "true" {
+			clusterIssuer = os.Getenv(utils.OIDCIssuerEnvVar)
+			gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set for OSS clusters", utils.OIDCIssuerEnvVar))
+		} else {
+			clusterName := os.Getenv(utils.ClusterNameEnvVar)
+			clusterLocation := os.Getenv(utils.ClusterLocationEnvVar)
+			gomega.Expect(clusterName).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterNameEnvVar))
+			gomega.Expect(clusterLocation).NotTo(gomega.BeEmpty(), fmt.Sprintf("%s environment variable must be set", utils.ClusterLocationEnvVar))
+			clusterIssuer = getClusterOIDCIssuer(clusterName, clusterLocation, projectID)
+			gomega.Expect(clusterIssuer).NotTo(gomega.BeEmpty(), "failed to get cluster OIDC issuer")
+		}
 
 		ginkgo.By(fmt.Sprintf("Creating workload identity provider: %s", providerID))
 		createWorkloadIdentityProvider(projectID, poolID, providerID, clusterIssuer)
