@@ -514,8 +514,10 @@ func (n *GCSFuseCSITestDriver) bucketIAMMember(ctx context.Context, serviceAccou
 		return fmt.Sprintf("serviceAccount:%v@%v.iam.gserviceaccount.com", prepareGcpSAName(serviceAccountNamespace), n.meta.GetProjectID())
 	}
 	// OSS_WIF_POOL_ID takes precedence; otherwise auto-detect from the node DaemonSet.
+	// Only auto-detect on OSS clusters — on GKE the DaemonSet may also have IDENTITY_POOL
+	// set, which would wrongly override the GKE Workload Identity IAM member format.
 	wifPoolID := os.Getenv("OSS_WIF_POOL_ID")
-	if wifPoolID == "" {
+	if wifPoolID == "" && os.Getenv(utils.IsOSSEnvVar) == "true" {
 		wifPoolID = n.detectOSSIdentityPool(ctx)
 	}
 	if wifPoolID != "" {
