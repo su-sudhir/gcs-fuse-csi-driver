@@ -20,14 +20,18 @@ package testsuites
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/onsi/ginkgo/v2"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
 	storageframework "k8s.io/kubernetes/test/e2e/storage/framework"
@@ -42,12 +46,17 @@ import (
 var LustreStorageClass = "lustre-rwx"
 
 const (
-	lustreCSIDriverName = "lustre.csi.storage.gke.io"
-	lustreMountPath     = "/mnt/lustre"
-	lustreVolName       = "lustre-vol"
-	gcsFuseMountPath    = "/mnt/gcs"
-	gcsFuseVolName      = "gcs-vol"
-	lustrePVCSize       = "9000Gi"
+	lustreCSIDriverName     = "lustre.csi.storage.gke.io"
+	lustreMountPath         = "/mnt/lustre"
+	lustreVolName           = "lustre-vol"
+	gcsFuseMountPath        = "/mnt/gcs"
+	gcsFuseVolName          = "gcs-vol"
+	lustrePVCSize           = "9000Gi"
+	// gcsFuseSidecarCacheVolName is the well-known volume name injected by the
+	// GCS Fuse webhook for the sidecar's file-cache directory. Pre-defining this
+	// volume in the pod spec causes the webhook to use our PVC instead of the
+	// default node-local emptyDir.
+	gcsFuseSidecarCacheVolName = "gke-gcsfuse-cache"
 )
 
 type gcsFuseCSILustreDualVolumeTestSuite struct {
@@ -150,6 +159,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-dual-pvc-")
 		defer cleanupPVC()
 
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -206,6 +218,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
 		pvc, cleanupPVC := createLustrePVC("lustre-rwx-pvc-")
 		defer cleanupPVC()
+
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating Pod-1 with both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -265,6 +280,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-persist-pvc-")
 		defer cleanupPVC()
 
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
 		ginkgo.By("Creating Pod-1 and writing data to both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -309,6 +327,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
 		pvc, cleanupPVC := createLustrePVC("lustre-drain-pvc-")
 		defer cleanupPVC()
+
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating the dual-mount pod and waiting for it to run")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -389,6 +410,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-largefile-pvc-")
 		defer cleanupPVC()
 
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -451,6 +475,9 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-mixedio-pvc-")
 		defer cleanupPVC()
 
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -488,5 +515,230 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 			fmt.Sprintf("mount | grep %v", lustreMountPath))
 		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
 			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+	})
+
+	// GCS Fuse file-cache backed by Lustre: the GCS Fuse sidecar's file-cache
+	// volume (gke-gcsfuse-cache) is backed by a Lustre PVC instead of the
+	// default node-local emptyDir. This makes the cache durable across pod
+	// restarts and shareable across nodes. The test verifies that GCS Fuse
+	// reads populate the Lustre-backed cache and that a replacement pod finds
+	// the pre-warmed cache intact.
+	ginkgo.It("should store GCS Fuse file cache on a Lustre-backed volume and serve cache hits from Lustre across pod restarts", func() {
+		skipIfLustreNotAvailable("GCS Fuse file-cache backed by Lustre test")
+
+		// EnableFileCachePrefix provisions the GCS Fuse PV with fileCacheCapacity
+		// set, which tells the sidecar to enable file-level caching.
+		l = local{}
+		l.config = driver.PrepareTest(ctx, f)
+		l.config.Prefix = specs.EnableFileCachePrefix
+		l.gcsFuseResource = storageframework.CreateVolumeResource(ctx, driver, l.config, pattern, e2evolume.SizeRange{})
+		defer cleanup()
+
+		ginkgo.By("Creating a Lustre PVC to back the GCS Fuse sidecar file cache")
+		pvc, cleanupPVC := createLustrePVC("lustre-gcsfuse-cache-pvc-")
+		defer cleanupPVC()
+
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
+		ginkgo.By("Creating Pod-1: GCS Fuse with Lustre PVC as the sidecar file-cache backing")
+		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		// Pre-define gke-gcsfuse-cache as the Lustre PVC. The webhook detects this
+		// pre-existing volume and skips injecting its default node-local emptyDir,
+		// so the sidecar writes its cache entries to Lustre instead.
+		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, gcsFuseSidecarCacheVolName, "/gcsfuse-cache", false)
+		// Also mount the same PVC at lustreMountPath so the test container can
+		// inspect what the sidecar cached there.
+		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod1.Create(ctx)
+		tPod1.WaitForRunning(ctx)
+
+		ginkgo.By("Pod-1: writing test files to the GCS Fuse mount")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("for i in $(seq 1 5); do echo \"content-${i}\" > %v/file-${i}.txt; done", gcsFuseMountPath))
+
+		ginkgo.By("Pod-1: reading files from GCS Fuse to populate the Lustre-backed file cache")
+		for i := 1; i <= 5; i++ {
+			tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+				fmt.Sprintf("grep 'content-%d' %v/file-%d.txt", i, gcsFuseMountPath, i))
+		}
+
+		ginkgo.By("Pod-1: verifying the Lustre volume contains file cache entries written by the GCS Fuse sidecar")
+		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test $(ls %v | wc -l) -gt 0", lustreMountPath))
+
+		ginkgo.By("Deleting Pod-1 to simulate a pod restart")
+		tPod1.Cleanup(ctx)
+
+		ginkgo.By("Creating Pod-2 with the same Lustre PVC as the GCS Fuse file-cache backing")
+		tPod2 := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod2.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, gcsFuseSidecarCacheVolName, "/gcsfuse-cache", false)
+		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod2.Create(ctx)
+		defer tPod2.Cleanup(ctx)
+		tPod2.WaitForRunning(ctx)
+
+		ginkgo.By("Pod-2: reading files from GCS Fuse — cache hits now served from the persisted Lustre-backed cache")
+		for i := 1; i <= 5; i++ {
+			tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+				fmt.Sprintf("grep 'content-%d' %v/file-%d.txt", i, gcsFuseMountPath, i))
+		}
+
+		ginkgo.By("Pod-2: verifying the Lustre-backed file cache is still intact and populated")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test $(ls %v | wc -l) -gt 0", lustreMountPath))
+
+		ginkgo.By("Pod-2: writing an additional file to GCS Fuse to extend the Lustre-backed cache")
+		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'cache-extended' > %v/extra.txt && grep 'cache-extended' %v/extra.txt",
+				gcsFuseMountPath, gcsFuseMountPath))
+	})
+
+	// Lustre disruption resilience with GCS Fuse unaffected: a NetworkPolicy
+	// blocks egress on port 988 (Lustre wire protocol) from the test namespace
+	// to the provisioned Lustre instance IP, simulating a network partition to
+	// the MDS/OSS. The test verifies that the GCS Fuse mount and its sidecar
+	// remain fully operational during the disruption, then confirms both volumes
+	// recover once the NetworkPolicy is removed.
+	//
+	// Prerequisite: the GKE cluster must have a NetworkPolicy-enforcing CNI
+	// (e.g. Calico or GKE Dataplane V2) enabled.
+	ginkgo.It("should keep GCS Fuse healthy and serving data when Lustre network connectivity is disrupted and recover after connectivity is restored", func() {
+		skipIfLustreNotAvailable("Lustre disruption resilience test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-disrupt-pvc-")
+		defer cleanupPVC()
+
+		ginkgo.By("Waiting for Lustre PVC to be bound")
+		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
+
+		ginkgo.By("Fetching the bound PVC to read its PV name")
+		boundPVC, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Get(ctx, pvc.Name, metav1.GetOptions{})
+		framework.ExpectNoError(err)
+
+		ginkgo.By("Extracting the Lustre instance IP from the PV volume attributes")
+		pv, err := f.ClientSet.CoreV1().PersistentVolumes().Get(ctx, boundPVC.Spec.VolumeName, metav1.GetOptions{})
+		framework.ExpectNoError(err)
+		lustreIP := pv.Spec.CSI.VolumeAttributes["ip"]
+		if lustreIP == "" {
+			framework.Failf("could not extract Lustre instance IP from PV %s volume attributes; got: %v",
+				pv.Name, pv.Spec.CSI.VolumeAttributes)
+		}
+		framework.Logf("Lustre instance IP: %s", lustreIP)
+
+		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
+		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod.Create(ctx)
+		defer tPod.Cleanup(ctx)
+		tPod.WaitForRunning(ctx)
+
+		ginkgo.By("Writing baseline data to both volumes to confirm they are initially healthy")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'gcs-baseline' > %v/baseline.txt", gcsFuseMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'lustre-baseline' > %v/baseline.txt", lustreMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'gcs-baseline' %v/baseline.txt && grep 'lustre-baseline' %v/baseline.txt",
+				gcsFuseMountPath, lustreMountPath))
+
+		ginkgo.By(fmt.Sprintf("Applying a NetworkPolicy to block port 988 egress to Lustre IP %s (simulating MDS/OSS network partition)", lustreIP))
+		tcpProto := corev1.ProtocolTCP
+		udpProto := corev1.ProtocolUDP
+		lustreCIDR := lustreIP + "/32"
+		port1 := intstr.FromInt32(1)
+		port989 := intstr.FromInt32(989)
+		endPort987 := int32(987)
+		endPort65535 := int32(65535)
+
+		// The policy allows all egress to non-Lustre destinations (covering GCS,
+		// DNS, k8s API, etc.) and allows non-988 ports to the Lustre IP. Port 988
+		// (Lustre wire protocol) to the Lustre instance IP is left unmatched and
+		// therefore dropped by the namespace-scoped egress restriction.
+		netpol := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "block-lustre-port-",
+				Namespace:    f.Namespace.Name,
+			},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{},
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+				Egress: []networkingv1.NetworkPolicyEgressRule{
+					// Allow all egress to IPs other than the Lustre instance.
+					{
+						To: []networkingv1.NetworkPolicyPeer{
+							{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{lustreCIDR}}},
+						},
+					},
+					// Allow egress to the Lustre IP on ports 1–987 (pre-Lustre range).
+					{
+						To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: lustreCIDR}}},
+						Ports: []networkingv1.NetworkPolicyPort{
+							{Protocol: &tcpProto, Port: &port1, EndPort: &endPort987},
+							{Protocol: &udpProto, Port: &port1, EndPort: &endPort987},
+						},
+					},
+					// Allow egress to the Lustre IP on ports 989–65535 (post-Lustre range).
+					{
+						To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: lustreCIDR}}},
+						Ports: []networkingv1.NetworkPolicyPort{
+							{Protocol: &tcpProto, Port: &port989, EndPort: &endPort65535},
+							{Protocol: &udpProto, Port: &port989, EndPort: &endPort65535},
+						},
+					},
+				},
+			},
+		}
+		netpol, err = f.ClientSet.NetworkingV1().NetworkPolicies(f.Namespace.Name).Create(ctx, netpol, metav1.CreateOptions{})
+		framework.ExpectNoError(err)
+		defer func() {
+			if netpol != nil {
+				_ = f.ClientSet.NetworkingV1().NetworkPolicies(f.Namespace.Name).Delete(
+					ctx, netpol.Name, metav1.DeleteOptions{})
+			}
+		}()
+
+		ginkgo.By("Verifying GCS Fuse mount remains readable while Lustre port 988 is blocked")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'gcs-baseline' %v/baseline.txt", gcsFuseMountPath))
+
+		ginkgo.By("Verifying GCS Fuse mount remains writable while Lustre port 988 is blocked")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'gcs-during-disruption' > %v/during.txt && grep 'gcs-during-disruption' %v/during.txt",
+				gcsFuseMountPath, gcsFuseMountPath))
+
+		ginkgo.By("Verifying the GCS Fuse FUSE mount is still present in the mount table during disruption")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+
+		ginkgo.By("Removing the NetworkPolicy to restore Lustre port 988 connectivity")
+		framework.ExpectNoError(f.ClientSet.NetworkingV1().NetworkPolicies(f.Namespace.Name).Delete(
+			ctx, netpol.Name, metav1.DeleteOptions{}))
+		netpol = nil // prevent double deletion in deferred cleanup
+
+		ginkgo.By("Waiting 60s for the Lustre client to reconnect after connectivity is restored")
+		time.Sleep(60 * time.Second)
+
+		ginkgo.By("Verifying Lustre mount is readable after recovery")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'lustre-baseline' %v/baseline.txt", lustreMountPath))
+
+		ginkgo.By("Verifying Lustre mount is writable after recovery")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'lustre-recovered' > %v/recovery.txt && grep 'lustre-recovered' %v/recovery.txt",
+				lustreMountPath, lustreMountPath))
+
+		ginkgo.By("Verifying both mounts are healthy after Lustre recovery")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("mount | grep %v", lustreMountPath))
 	})
 }
