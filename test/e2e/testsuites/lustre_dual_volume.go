@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
 	storageframework "k8s.io/kubernetes/test/e2e/storage/framework"
@@ -159,8 +158,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-dual-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -219,8 +216,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-rwx-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating Pod-1 with both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -280,8 +275,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-persist-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating Pod-1 and writing data to both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -328,8 +321,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-drain-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating the dual-mount pod and waiting for it to run")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -410,8 +401,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-largefile-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -475,8 +464,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-mixedio-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -538,8 +525,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-gcsfuse-cache-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Creating Pod-1: GCS Fuse with Lustre PVC as the sidecar file-cache backing")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -615,8 +600,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-disrupt-pvc-")
 		defer cleanupPVC()
 
-		ginkgo.By("Waiting for Lustre PVC to be bound")
-		framework.ExpectNoError(e2epv.WaitForPersistentVolumeClaimPhase(ctx, corev1.ClaimBound, f.ClientSet, f.Namespace.Name, pvc.Name, framework.Poll, 20*time.Minute))
 
 		ginkgo.By("Fetching the bound PVC to read its PV name")
 		boundPVC, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Get(ctx, pvc.Name, metav1.GetOptions{})
