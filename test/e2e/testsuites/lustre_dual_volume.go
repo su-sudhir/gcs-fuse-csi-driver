@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
@@ -51,6 +52,9 @@ const (
 	gcsFuseMountPath        = "/mnt/gcs"
 	gcsFuseVolName          = "gcs-vol"
 	lustrePVCSize           = "9000Gi"
+	// lustrePVCBindTimeout accounts for Managed Lustre instance provisioning,
+	// which can take 10+ minutes for large capacities like lustrePVCSize.
+	lustrePVCBindTimeout = 20 * time.Minute
 	// gcsFuseSidecarCacheVolName is the well-known volume name injected by the
 	// GCS Fuse webhook for the sidecar's file-cache directory. Pre-defining this
 	// volume in the pod spec causes the webhook to use our PVC instead of the
@@ -118,7 +122,10 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 	}
 
 	// createLustrePVC dynamically provisions a Lustre-backed PVC via
-	// LustreStorageClass and returns it with a cleanup func.
+	// LustreStorageClass and waits for it to reach Bound before returning, so
+	// callers can safely attach it to a pod (or read its PV) immediately.
+	// Managed Lustre instance provisioning can take several minutes for large
+	// capacities, so this uses a generous timeout.
 	createLustrePVC := func(namePrefix string) (*corev1.PersistentVolumeClaim, func()) {
 		scName := LustreStorageClass
 		pvc := &corev1.PersistentVolumeClaim{
@@ -138,6 +145,16 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		}
 		pvc, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Create(ctx, pvc, metav1.CreateOptions{})
 		framework.ExpectNoError(err)
+		ginkgo.By(fmt.Sprintf("Waiting for Lustre PVC %s to be bound (up to %v, silently polling)", pvc.Name, lustrePVCBindTimeout))
+		start := time.Now()
+		framework.ExpectNoError(wait.PollUntilContextTimeout(ctx, framework.Poll, lustrePVCBindTimeout, true, func(ctx context.Context) (bool, error) {
+			current, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Get(ctx, pvc.Name, metav1.GetOptions{})
+			if err != nil {
+				return false, nil
+			}
+			return current.Status.Phase == corev1.ClaimBound, nil
+		}))
+		framework.Logf("Lustre PVC %s bound after %v", pvc.Name, time.Since(start))
 		return pvc, func() {
 			framework.ExpectNoError(f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Delete(
 				ctx, pvc.Name, metav1.DeleteOptions{}))
@@ -479,7 +496,7 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		// then waits for the GCS workload to finish before asserting exit codes.
 		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
 			fmt.Sprintf(
-				"bash -c 'set -e; "+
+				"sh -c 'set -e; "+
 					"for i in $(seq 1 100); do echo \"small-${i}\" > %v/small-${i}.txt; done & GCS_PID=$!; "+
 					"dd if=/dev/zero of=%v/seq.bin bs=1M count=512 conv=fsync; "+
 					"dd if=%v/seq.bin of=/dev/null bs=1M; "+
@@ -525,6 +542,20 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-gcsfuse-cache-pvc-")
 		defer cleanupPVC()
 
+		// The Lustre CSIDriver declares fsGroupPolicy: ReadWriteOnceWithFSType,
+		// so kubelet skips applying fsGroup ownership for this ReadWriteMany PVC.
+		// The Lustre root directory therefore keeps its default root-only
+		// permissions, which blocks the GCS Fuse sidecar (running as non-root)
+		// from creating its cache directory. Open up permissions once, from a
+		// plain pod with no GCS Fuse volumes (so the webhook doesn't inject the
+		// sidecar here), before the sidecar ever touches this volume.
+		ginkgo.By("Opening up permissions on the Lustre-backed cache volume for the non-root GCS Fuse sidecar")
+		permFixPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		permFixPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		permFixPod.Create(ctx)
+		permFixPod.WaitForRunning(ctx)
+		permFixPod.VerifyExecInPodSucceed(f, specs.TesterContainerName, fmt.Sprintf("chmod 1777 %v", lustreMountPath))
+		permFixPod.Cleanup(ctx)
 
 		ginkgo.By("Creating Pod-1: GCS Fuse with Lustre PVC as the sidecar file-cache backing")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -551,7 +582,7 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 
 		ginkgo.By("Pod-1: verifying the Lustre volume contains file cache entries written by the GCS Fuse sidecar")
 		tPod1.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("test $(ls %v | wc -l) -gt 0", lustreMountPath))
+			fmt.Sprintf("test $(ls -A %v | wc -l) -gt 0", lustreMountPath))
 
 		ginkgo.By("Deleting Pod-1 to simulate a pod restart")
 		tPod1.Cleanup(ctx)
@@ -573,7 +604,7 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 
 		ginkgo.By("Pod-2: verifying the Lustre-backed file cache is still intact and populated")
 		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
-			fmt.Sprintf("test $(ls %v | wc -l) -gt 0", lustreMountPath))
+			fmt.Sprintf("test $(ls -A %v | wc -l) -gt 0", lustreMountPath))
 
 		ginkgo.By("Pod-2: writing an additional file to GCS Fuse to extend the Lustre-backed cache")
 		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName,
