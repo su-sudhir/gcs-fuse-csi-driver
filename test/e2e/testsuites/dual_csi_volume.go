@@ -143,7 +143,58 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 		}
 	}
 
-	// ── Test 1: GCS → PD data pipeline ──────────────────────────────────────
+	// ── Test 1: Same-pod dual mount + R/W ────────────────────────────────────
+	//
+	//           [pod]
+	//           /   \
+	//    [gcs-vol] [pd-vol]
+	//        |         |
+	//     [GCS]   [PD disk]
+	//
+	// Both volumes are mounted in the same pod. The test verifies that writes
+	// and reads succeed on each mount independently, with no cross-mount bleed.
+	ginkgo.It("should mount a GCS Fuse volume and a PD-backed PVC in the same pod and allow independent R/W on both", func() {
+		skipIfPDCSINotInstalled("same-pod dual mount test")
+
+		init()
+		defer cleanup()
+
+		ginkgo.By(fmt.Sprintf("Creating PD-backed PVC using StorageClass %q", PDStorageClass))
+		pvc, cleanupPVC := createPDPVC("dual-csi-pd-pvc-", "1Gi")
+		defer cleanupPVC()
+
+		ginkgo.By("Configuring the pod with both GCS Fuse and PD volumes")
+		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, pdVolName, pdMountPath, false)
+
+		ginkgo.By("Deploying the pod")
+		tPod.Create(ctx)
+		defer tPod.Cleanup(ctx)
+
+		ginkgo.By("Waiting for the pod to be running")
+		tPod.WaitForRunning(ctx)
+
+		ginkgo.By("Writing and reading a file on the GCS Fuse volume")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'hello-gcs' > %v/gcs-test.txt && grep 'hello-gcs' %v/gcs-test.txt",
+				gcsFuseMountPath, gcsFuseMountPath))
+
+		ginkgo.By("Writing and reading a file on the PD volume")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'hello-pd' > %v/pd-test.txt && grep 'hello-pd' %v/pd-test.txt",
+				pdMountPath, pdMountPath))
+
+		ginkgo.By("Verifying the GCS file is not visible on the PD mount")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test ! -f %v/gcs-test.txt", pdMountPath))
+
+		ginkgo.By("Verifying the PD file is not visible on the GCS Fuse mount")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("test ! -f %v/pd-test.txt", gcsFuseMountPath))
+	})
+
+	// ── Test 2: GCS → PD data pipeline ──────────────────────────────────────
 	//
 	//           [pod]
 	//           /   \
@@ -203,7 +254,7 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 			fmt.Sprintf("diff %v/%v %v/%v", gcsFuseMountPath, seedFileName, pdMountPath, seedFileName))
 	})
 
-	// ── Test 2: Large file transfer ─────────────────────────────────────────
+	// ── Test 3: Large file transfer ─────────────────────────────────────────
 	//
 	// A 1 GiB file is pre-seeded in GCS via the GCS API. The pod copies it from
 	// the GCS Fuse mount to the PD volume. The test verifies the transfer
@@ -255,7 +306,7 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 			fmt.Sprintf("test -f %v/%v", gcsFuseMountPath, largeFileName))
 	})
 
-	// ── Test 3: Snapshot while mounted ──────────────────────────────────────
+	// ── Test 4: Snapshot while mounted ──────────────────────────────────────
 	//
 	// A pod writes to the PD volume while a GCS Fuse volume is also mounted. A
 	// VolumeSnapshot of the PD PVC is triggered mid-run. The test verifies the
@@ -340,7 +391,7 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 				pdMountPath, pdMountPath))
 	})
 
-	// ── Test 4: Online PD resize ────────────────────────────────────────────
+	// ── Test 5: Online PD resize ────────────────────────────────────────────
 	//
 	// A pod has both a PD-backed PVC and a GCS Fuse volume mounted. The PD PVC
 	// is expanded online while the pod is running. The test verifies the
@@ -396,7 +447,7 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 			fmt.Sprintf(`df %v | awk 'NR==2{if($2 >= 9961472) exit 0; else exit 1}'`, pdMountPath))
 	})
 
-	// ── Test 5: Concurrent writes from two pods to a shared GCS Fuse bucket ──
+	// ── Test 6: Concurrent writes from two pods to a shared GCS Fuse bucket ──
 	// and their respective isolated PD volumes
 	//
 	// Two pods run simultaneously, each writing different files at the same
@@ -470,7 +521,7 @@ func (t *gcsFuseCSIDualCSIVolumeTestSuite) DefineTests(driver storageframework.T
 		tPod2.VerifyExecInPodSucceed(f, specs.TesterContainerName, fmt.Sprintf("grep 'pod2-pd-data' %v/pod2-data.txt", pdMountPath))
 	})
 
-	// ── Test 6: Multi-pod sharing of a GCS Fuse volume with isolated PD volumes ─
+	// ── Test 7: Multi-pod sharing of a GCS Fuse volume with isolated PD volumes ─
 	//
 	// Two pods run simultaneously, both mounting the same GCS Fuse volume (RWX)
 	// while each also has its own PD-backed PVC (RWO). The test verifies a
