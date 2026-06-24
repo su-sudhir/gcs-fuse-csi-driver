@@ -22,12 +22,15 @@ import (
 	"fmt"
 	"time"
 
+	"local/test/e2e/specs"
+
 	"github.com/onsi/ginkgo/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -35,8 +38,8 @@ import (
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
 	storageframework "k8s.io/kubernetes/test/e2e/storage/framework"
+	storageutils "k8s.io/kubernetes/test/e2e/storage/utils"
 	admissionapi "k8s.io/pod-security-admission/api"
-	"local/test/e2e/specs"
 )
 
 // LustreStorageClass is the StorageClass used to dynamically provision
@@ -46,12 +49,12 @@ import (
 var LustreStorageClass = "lustre-rwx"
 
 const (
-	lustreCSIDriverName     = "lustre.csi.storage.gke.io"
-	lustreMountPath         = "/mnt/lustre"
-	lustreVolName           = "lustre-vol"
-	gcsFuseMountPath        = "/mnt/gcs"
-	gcsFuseVolName          = "gcs-vol"
-	lustrePVCSize           = "9000Gi"
+	lustreCSIDriverName = "lustre.csi.storage.gke.io"
+	lustreMountPath     = "/mnt/lustre"
+	lustreVolName       = "lustre-vol"
+	gcsFuseMountPath    = "/mnt/gcs"
+	gcsFuseVolName      = "gcs-vol"
+	lustrePVCSize       = "9000Gi"
 	// lustrePVCBindTimeout accounts for Managed Lustre instance provisioning,
 	// which can take 10+ minutes for large capacities like lustrePVCSize.
 	lustrePVCBindTimeout = 20 * time.Minute
@@ -60,6 +63,8 @@ const (
 	// volume in the pod spec causes the webhook to use our PVC instead of the
 	// default node-local emptyDir.
 	gcsFuseSidecarCacheVolName = "gke-gcsfuse-cache"
+
+	snapshotReadyTimeout = 5 * time.Minute
 )
 
 type gcsFuseCSILustreDualVolumeTestSuite struct {
@@ -175,7 +180,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-dual-pvc-")
 		defer cleanupPVC()
 
-
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -232,7 +236,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
 		pvc, cleanupPVC := createLustrePVC("lustre-rwx-pvc-")
 		defer cleanupPVC()
-
 
 		ginkgo.By("Creating Pod-1 with both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -292,7 +295,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-persist-pvc-")
 		defer cleanupPVC()
 
-
 		ginkgo.By("Creating Pod-1 and writing data to both volumes")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod1.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -337,7 +339,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
 		pvc, cleanupPVC := createLustrePVC("lustre-drain-pvc-")
 		defer cleanupPVC()
-
 
 		ginkgo.By("Creating the dual-mount pod and waiting for it to run")
 		tPod1 := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -418,7 +419,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-largefile-pvc-")
 		defer cleanupPVC()
 
-
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
@@ -480,7 +480,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
 		pvc, cleanupPVC := createLustrePVC("lustre-mixedio-pvc-")
 		defer cleanupPVC()
-
 
 		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
 		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
@@ -631,7 +630,6 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		pvc, cleanupPVC := createLustrePVC("lustre-disrupt-pvc-")
 		defer cleanupPVC()
 
-
 		ginkgo.By("Fetching the bound PVC to read its PV name")
 		boundPVC, err := f.ClientSet.CoreV1().PersistentVolumeClaims(f.Namespace.Name).Get(ctx, pvc.Name, metav1.GetOptions{})
 		framework.ExpectNoError(err)
@@ -755,4 +753,96 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
 			fmt.Sprintf("mount | grep %v", lustreMountPath))
 	})
+
+	// Snapshot of Lustre PVC while GCS Fuse mounted and active: with the pod
+	// actively writing to the Lustre PVC and the GCS Fuse volume mounted, a
+	// VolumeSnapshot of the Lustre PVC is triggered mid-run. The test verifies
+	// the snapshot becomes ready without disrupting the GCS Fuse mount or
+	// interrupting the pod, and that the Lustre volume itself stays read/write
+	// throughout the snapshot operation.
+	ginkgo.It("should create a VolumeSnapshot of the Lustre PVC while GCS Fuse is mounted and active without disrupting either mount", func() {
+		skipIfLustreNotAvailable("Lustre snapshot-while-mounted test")
+
+		dc := f.DynamicClient
+		if _, err := dc.Resource(storageutils.SnapshotClassGVR).List(ctx, metav1.ListOptions{}); err != nil {
+			e2eskipper.Skipf("VolumeSnapshot CRDs not available, skipping Lustre snapshot test: %v", err)
+		}
+
+		init()
+		defer cleanup()
+
+		ginkgo.By("Creating a dynamically provisioned Lustre PVC")
+		pvc, cleanupPVC := createLustrePVC("lustre-snapshot-pvc-")
+		defer cleanupPVC()
+
+		ginkgo.By("Configuring the pod with both GCS Fuse and Lustre volumes")
+		tPod := specs.NewTestPod(f.ClientSet, f.Namespace)
+		tPod.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
+		tPod.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod.Create(ctx)
+		defer tPod.Cleanup(ctx)
+		tPod.WaitForRunning(ctx)
+
+		ginkgo.By("Writing data to the Lustre volume to simulate active workload")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'pre-snapshot-lustre' > %v/data.txt", lustreMountPath))
+
+		ginkgo.By("Writing a marker file to the GCS Fuse mount before snapshot")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("echo 'gcs-marker' > %v/marker.txt", gcsFuseMountPath))
+
+		ginkgo.By(fmt.Sprintf("Creating VolumeSnapshotClass for %s", lustreCSIDriverName))
+		vsClass := storageutils.GenerateSnapshotClassSpec(lustreCSIDriverName, map[string]string{}, f.Namespace.Name)
+		vsClass, err := dc.Resource(storageutils.SnapshotClassGVR).Create(ctx, vsClass, metav1.CreateOptions{})
+		framework.ExpectNoError(err)
+		defer func() {
+			if err := dc.Resource(storageutils.SnapshotClassGVR).Delete(ctx, vsClass.GetName(), metav1.DeleteOptions{}); err != nil {
+				framework.Logf("Failed to delete VolumeSnapshotClass %q: %v", vsClass.GetName(), err)
+			}
+		}()
+
+		ginkgo.By(fmt.Sprintf("Creating VolumeSnapshot of Lustre PVC %q", pvc.Name))
+		snapshot := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": storageutils.SnapshotAPIVersion,
+				"kind":       "VolumeSnapshot",
+				"metadata": map[string]interface{}{
+					"generateName": "lustre-snapshot-",
+					"namespace":    f.Namespace.Name,
+				},
+				"spec": map[string]interface{}{
+					"volumeSnapshotClassName": vsClass.GetName(),
+					"source": map[string]interface{}{
+						"persistentVolumeClaimName": pvc.Name,
+					},
+				},
+			},
+		}
+		snapshot, err = dc.Resource(storageutils.SnapshotGVR).Namespace(f.Namespace.Name).Create(ctx, snapshot, metav1.CreateOptions{})
+		framework.ExpectNoError(err)
+		defer func() {
+			if err := storageutils.DeleteAndWaitSnapshot(ctx, dc, f.Namespace.Name, snapshot.GetName(), framework.Poll, snapshotReadyTimeout); err != nil {
+				framework.Logf("Failed to delete VolumeSnapshot %q: %v", snapshot.GetName(), err)
+			}
+		}()
+
+		ginkgo.By("Waiting for the VolumeSnapshot to become ready")
+		framework.ExpectNoError(
+			storageutils.WaitForSnapshotReady(ctx, dc, f.Namespace.Name, snapshot.GetName(), framework.Poll, snapshotReadyTimeout),
+		)
+
+		ginkgo.By("Verifying the GCS Fuse mount is still accessible after snapshot")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'gcs-marker' %v/marker.txt", gcsFuseMountPath))
+
+		ginkgo.By("Verifying the Lustre volume is still writable after snapshot")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName,
+			fmt.Sprintf("grep 'pre-snapshot-lustre' %v/data.txt && echo 'post-snapshot-lustre' >> %v/data.txt && grep 'post-snapshot-lustre' %v/data.txt",
+				lustreMountPath, lustreMountPath, lustreMountPath))
+
+		ginkgo.By("Verifying the pod was not interrupted and both mounts remain healthy")
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName, fmt.Sprintf("mount | grep %v", lustreMountPath))
+		tPod.VerifyExecInPodSucceed(f, specs.TesterContainerName, fmt.Sprintf("mount | grep %v", gcsFuseMountPath))
+	})
+
 }
