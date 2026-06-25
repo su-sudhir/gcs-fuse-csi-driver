@@ -563,9 +563,13 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		// pre-existing volume and skips injecting its default node-local emptyDir,
 		// so the sidecar writes its cache entries to Lustre instead.
 		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, gcsFuseSidecarCacheVolName, "/gcsfuse-cache", false)
-		// Also mount the same PVC at lustreMountPath so the test container can
-		// inspect what the sidecar cached there.
-		tPod1.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		// Add a second mount path for the same gke-gcsfuse-cache volume (not a
+		// second `volumes:` entry for the PVC) so the test container can inspect
+		// what the sidecar cached there. Declaring the same PVC under two
+		// separate pod.spec.volumes entries instead causes kubelet's volume
+		// reconciler on vanilla kubeadm clusters to never mark the second entry
+		// as mounted, hanging the pod in ContainerCreating indefinitely.
+		tPod1.SetupCacheVolumeMount(lustreMountPath)
 		tPod1.Create(ctx)
 		tPod1.WaitForRunning(ctx)
 
@@ -590,7 +594,7 @@ func (t *gcsFuseCSILustreDualVolumeTestSuite) DefineTests(driver storageframewor
 		tPod2 := specs.NewTestPod(f.ClientSet, f.Namespace)
 		tPod2.SetupVolume(l.gcsFuseResource, gcsFuseVolName, gcsFuseMountPath, false)
 		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, gcsFuseSidecarCacheVolName, "/gcsfuse-cache", false)
-		tPod2.SetupVolume(&storageframework.VolumeResource{Pvc: pvc}, lustreVolName, lustreMountPath, false)
+		tPod2.SetupCacheVolumeMount(lustreMountPath)
 		tPod2.Create(ctx)
 		defer tPod2.Cleanup(ctx)
 		tPod2.WaitForRunning(ctx)
