@@ -156,12 +156,14 @@ func (d *ossDriver) GetDynamicProvisionStorageClass(ctx context.Context, config 
 		},
 		Type: corev1.SecretTypeOpaque,
 	}
-	if _, err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+	// Multi-volume tests call this once per volume in the same namespace, so
+	// the secret (same content every time) may already exist.
+	if _, err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		e2eframework.Failf("failed to create provisioner secret %s/%s: %v", namespace, provisionerSecretName, err)
 	}
 
 	ginkgo.DeferCleanup(func(ctx context.Context) {
-		if err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Delete(ctx, provisionerSecretName, metav1.DeleteOptions{}); err != nil {
+		if err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Delete(ctx, provisionerSecretName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			e2eframework.Logf("failed to delete provisioner secret %s/%s: %v", namespace, provisionerSecretName, err)
 		}
 		binding.Cleanup(ctx)
