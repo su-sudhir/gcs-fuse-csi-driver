@@ -14,9 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package conformance runs the GCS Fuse CSI driver test suites (including
-// PreprovisionedPV patterns) on an OSS kubeadm cluster — without any GKE
-// cluster-name or Workload Identity requirements.
+// Package conformance runs the real upstream Kubernetes external-storage
+// testsuites (k8s.io/kubernetes/test/e2e/storage/testsuites) against the GCS
+// Fuse CSI driver on an OSS kubeadm cluster, using ossDriver — a Go
+// storageframework.TestDriver implementing PreprovisionedPVTestDriver and
+// EphemeralTestDriver — instead of the driver-definition YAML mechanism
+// (test/k8s-integration/run.sh), which only supports CSI ephemeral volumes.
 //
 // Unlike test/e2e/e2e_test.go which validates that the kubeconfig context
 // starts with "gke_" and parses project/zone from the context name, this
@@ -27,14 +30,12 @@ limitations under the License.
 //
 //	go test -v ./test/k8s-integration/conformance/ \
 //	  --project=prod-y-in2508995 \
-//	  --zone=us-central1-a \
-//	  --bucket-location=us-central1 \
-//	  BUCKET_NAME=my-bucket ./gcsfuse-conformance.test ...
+//	  --zone=us-central1-a
 //
 // Or build a binary first:
 //
 //	go test -c -o gcsfuse-conformance.test ./test/k8s-integration/conformance/
-//	BUCKET_NAME=my-bucket ./gcsfuse-conformance.test --project=... --zone=...
+//	./gcsfuse-conformance.test --project=... --zone=...
 package conformance
 
 import (
@@ -44,9 +45,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"local/test/e2e/testsuites"
-	"local/test/e2e/utils"
-
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 
@@ -54,18 +52,17 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/test/e2e/framework"
 	storageframework "k8s.io/kubernetes/test/e2e/storage/framework"
+	storagetestsuites "k8s.io/kubernetes/test/e2e/storage/testsuites"
 )
 
 var (
 	// GCP flags — required on OSS clusters since we cannot parse them from
 	// the GKE kubeconfig context name.
-	project     = flag.String("project", "", "GCP project ID (used to set env vars for testsuites)")
-	zone        = flag.String("zone", "", "GCE zone of the cluster nodes (e.g. us-central1-a)")
-	clusterName = flag.String("cluster-name", "oss-cluster", "Cluster name used for metadata (informational only)")
+	project = flag.String("project", "", "GCP project ID (used for per-test bucket creation)")
+	zone    = flag.String("zone", "", "GCE zone of the cluster nodes (e.g. us-central1-a)")
 )
 
-// init runs once before any tests to configure the e2e framework and
-// set env vars that testsuites read at DefineTests time.
+// init runs once before any tests to configure the e2e framework.
 var _ = func() bool {
 	testing.Init()
 
@@ -85,35 +82,6 @@ var _ = func() bool {
 	if *zone == "" {
 		klog.Fatalf("--zone must be set (GCE zone, e.g. us-central1-a)")
 	}
-
-	// Several testsuites read boolean env vars at DefineTests time and fatal if
-	// they are unset or non-boolean. Set safe OSS defaults so callers only need
-	// to override the ones they care about.
-	setDefaultEnv := func(key, val string) {
-		if os.Getenv(key) == "" {
-			os.Setenv(key, val)
-		}
-	}
-	// Native sidecar (k8s >= 1.29 feature gate). Default off for k8s 1.28.
-	setDefaultEnv(utils.TestWithNativeSidecarEnvVar, "false")
-	// SA volume injection requires GKE Workload Identity — not available on OSS.
-	setDefaultEnv(utils.TestWithSAVolumeInjectionEnvVar, "false")
-	// Sidecar bucket access check — enabled now that each test namespace's
-	// gcsfuse-csi-sa KSA is bound to its bucket via WIF.
-	setDefaultEnv(utils.TestWithSidecarBucketAccessCheckEnvVar, "true")
-	// Error file clean-up — safe to enable on OSS.
-	setDefaultEnv(utils.TestWithErrorFileCleanUpEnvVar, "true")
-	// Cluster metadata env vars used by some testsuites for labels/logging.
-	setDefaultEnv(utils.IsOSSEnvVar, "true")
-	setDefaultEnv(utils.IsZBEnabledEnvVar, "false")
-	setDefaultEnv(utils.ProjectEnvVar, *project)
-	setDefaultEnv(utils.ClusterLocationEnvVar, *zone)
-	setDefaultEnv(utils.ClusterNameEnvVar, *clusterName)
-	// GCS Fuse version string used for feature-flag detection in testsuites.
-	// On OSS we cannot query the sidecar binary version; use a recent GKE
-	// release version so all feature gates are enabled.
-	setDefaultEnv(utils.GcsfuseVersionVarName, "v3.8.0-gke.0")
-	testsuites.GCSFuseVersionStr = os.Getenv(utils.GcsfuseVersionVarName)
 
 	return true
 }()
@@ -139,44 +107,37 @@ var _ = ginkgo.Describe("Conformance Test Suite", func() {
 	// management.
 	testDriver := initOSSDriver(*project)
 
-	// All testsuites except the ones that crash the entire Ginkgo process
-	// during spec-tree construction rather than just failing their own specs.
-	//
-	// Excluded — DefineTests (or a function it calls unconditionally, not from
-	// inside an It/BeforeEach) hard-casts to *specs.GCSFuseCSITestDriver or
-	// otherwise panics before any leaf node exists to catch it, taking down
-	// every other suite registered in the same process:
-	//   - InitGcsFuseCSIGCSFuseIntegrationTestSuite,
-	//     InitGcsFuseCSIGCSFuseIntegrationFileCacheTestSuite,
-	//     InitGcsFuseCSIGCSFuseIntegrationFileCacheParallelDownloadsTestSuite:
-	//     generateDynamicTests/generateStaticTests call isConfigCompatible ->
-	//     hnsEnabled/zbEnabled/flatEnabled, which gomega.Expect-panics on cast
-	//     failure, at the end of DefineTests (unconditional, not in a closure).
-	//   - InitGcsFuseCSIFileCacheTestSuite, InitGcsFuseCSIMetricsTestSuite:
-	//     hard-cast with framework.Failf at the very top of DefineTests.
-	//   - InitGcsFuseCSIProfilesTestSuite: InitGcsFuseCSIProfilesTestSuite()
-	//     itself calls control.NewStorageControlClient + gomega.Expect before
-	//     DefineTests even runs, at suite-list construction time.
-	//
-	// Everything else below only does GCSFuseCSITestDriver-specific work
-	// inside closures invoked from It/BeforeEach (kernel_params, cloud_profiler,
-	// istio) or has no such dependency at all — a cast/assertion failure there
-	// only fails that one spec.
+	// The real upstream Kubernetes external-storage testsuites, run against
+	// ossDriver directly (no driver-definition YAML, so PreprovisionedPV
+	// patterns work here unlike test/k8s-integration/run.sh). ossDriver only
+	// declares CapPersistence/CapExec/CapMultiPODs/CapRWX and implements
+	// TestDriver/PreprovisionedPVTestDriver/EphemeralTestDriver — suites or
+	// patterns needing capabilities it doesn't declare (snapshots, resize,
+	// topology, dynamic provisioning, volume limits) self-skip via each
+	// suite's own SkipUnsupportedTests/pattern checks, the same mechanism
+	// that already skips DynamicPV in ossDriver.SkipUnsupportedTest.
 	conformanceSuites := []func() storageframework.TestSuite{
-		testsuites.InitGcsFuseCSIVolumesTestSuite,
-		testsuites.InitGcsFuseCSIMultiVolumeTestSuite,
-		testsuites.InitGcsFuseCSISubPathTestSuite,
-		testsuites.InitGcsFuseCSICloudProfilerTestSuite,
-		testsuites.InitGcsFuseCSIFailedMountTestSuite,
-		testsuites.InitGcsFuseCSIAutoTerminationTestSuite,
-		testsuites.InitGcsFuseKernelParamsTestSuite,
-		testsuites.InitGcsFuseMountTestSuite,
-		testsuites.InitGcsFuseCSIIstioTestSuite,
-		testsuites.InitGcsFuseCSIMetadataPrefetchTestSuite,
-		testsuites.InitGcsFuseCSIWorkloadsTestSuite,
-		testsuites.InitGcsFuseCSIOIDCTestSuite,
-		testsuites.InitGcsFuseCSIPerformanceTestSuite,
-		testsuites.InitGcsFuseCSIWorkloadIdentityFederationTestSuite,
+		storagetestsuites.InitVolumesTestSuite,
+		storagetestsuites.InitVolumeIOTestSuite,
+		storagetestsuites.InitVolumeModeTestSuite,
+		storagetestsuites.InitMultiVolumeTestSuite,
+		storagetestsuites.InitSubPathTestSuite,
+		storagetestsuites.InitEphemeralTestSuite,
+		storagetestsuites.InitReadWriteOncePodTestSuite,
+		storagetestsuites.InitProvisioningTestSuite,
+		storagetestsuites.InitCapacityTestSuite,
+		storagetestsuites.InitVolumeLimitsTestSuite,
+		storagetestsuites.InitTopologyTestSuite,
+		storagetestsuites.InitFsGroupChangePolicyTestSuite,
+		storagetestsuites.InitDisruptiveTestSuite,
+		storagetestsuites.InitVolumeExpandTestSuite,
+		storagetestsuites.InitSnapshottableTestSuite,
+		storagetestsuites.InitSnapshottableStressTestSuite,
+		storagetestsuites.InitVolumeGroupSnapshottableTestSuite,
+		storagetestsuites.InitVolumeStressTestSuite,
+		storagetestsuites.InitVolumeModifyTestSuite,
+		storagetestsuites.InitVolumePerformanceTestSuite,
+		storagetestsuites.InitPvcDeletionPerformanceTestSuite,
 	}
 
 	ginkgo.Context(fmt.Sprintf("[Driver: %s]", testDriver.GetDriverInfo().Name), func() {
