@@ -159,8 +159,18 @@ func (d *ossDriver) PrepareTest(ctx context.Context, f *e2eframework.Framework) 
 }
 
 // createBucket creates a per-test GCS bucket for the given namespace.
+//
+// GCS bucket names are capped at 63 characters, so this can't simply
+// concatenate <project>-gcsfuse-test-<namespace>-<uuid>: the project ID,
+// namespace, and a full UUID alone routinely exceed that. Truncate the
+// namespace and shorten the UUID to a random 8-character suffix, which is
+// still unique enough to avoid collisions within a single test run.
 func (d *ossDriver) createBucket(ctx context.Context, namespace string) string {
-	bucketName := fmt.Sprintf("%s-gcsfuse-test-%s-%s", d.projectID, namespace, uuid.NewString())
+	ns := namespace
+	if len(ns) > 20 {
+		ns = ns[:20]
+	}
+	bucketName := fmt.Sprintf("gcsfuse-oss-%s-%s", ns, uuid.NewString()[:8])
 	if err := d.gcsClient.Bucket(bucketName).Create(ctx, d.projectID, &storage.BucketAttrs{Location: testBucketLocation}); err != nil {
 		e2eframework.Failf("failed to create bucket %q: %v", bucketName, err)
 	}
