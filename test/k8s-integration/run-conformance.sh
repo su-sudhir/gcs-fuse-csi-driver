@@ -62,22 +62,20 @@ readonly GINKGO_FOCUS="${GINKGO_FOCUS:-}"
 # regular container that can only start after all init containers finish — deadlock.
 # "existing paths" / "files as paths" require a type assertion to *GCSFuseCSITestDriver.
 # "multiple GCS buckets via the same volume" requires a driver that provides multi-bucket
-# volumes; our ossDriver uses a single bucket with per-test subdir isolation.
+# volumes; our ossDriver provisions a single per-test bucket.
 # "subPath" tests: the kubelet accesses the FUSE mount directory to create the subPath
 # bind mount BEFORE the sidecar starts (sidecar is a regular container in non-native mode).
 # The FUSE daemon is not yet running → kubelet goroutine blocks forever.  All subPath
 # patterns are incompatible with non-native sidecar mode.
-# "same bucket from different Pods" tests: pod1 writes data, pod2 reads it.  Our ossDriver
-# uses per-volume subdir isolation (only-dir=<uuid>), so different volume resources point
-# to different GCS paths and data written by pod1 is invisible to pod2.
 # "custom buffer volume" tests: create a PVC with StorageClass "standard-rwo" (GCE PD) for
 # the gcsfuse buffer volume.  The standard-rwo StorageClass does not exist on OSS clusters.
-# "should store data in implicit directory" tests: write to /mnt/test/implicit-dir/data where
-# implicit-dir has no GCS objects yet.  gcsfuse --implicit-dirs only shows directories that
-# exist implicitly (via existing object prefixes); a fresh empty subdir has no such prefix so
-# the kernel LOOKUP for implicit-dir returns ENOENT.  GKE's driver calls createGCSTestFiles
-# to seed the bucket first; our ossDriver does not.
-readonly GINKGO_SKIP="${GINKGO_SKIP:-Performance|Disruptive|Dynamic PV|custom sidecar container image|in init container|should support existing paths|should support files as paths|multiple GCS buckets via the same volume|subPath|same bucket from different Pods|custom buffer volume|should store data in implicit directory}"
+#
+# Unlocked now that each test gets its own WIF-bound bucket:
+# "should store data in implicit directory" now works because PrepareTest seeds the bucket
+# with an implicit-dir placeholder object before the test runs.
+# "same bucket from different Pods" now works because all pods in a test share the same
+# per-test bucket rather than being isolated into separate only-dir subdirectories.
+readonly GINKGO_SKIP="${GINKGO_SKIP:-Performance|Disruptive|Dynamic PV|custom sidecar container image|in init container|should support existing paths|should support files as paths|multiple GCS buckets via the same volume|subPath|custom buffer volume}"
 readonly GINKGO_TIMEOUT="${GINKGO_TIMEOUT:-4h}"
 readonly REPORT_DIR="${REPORT_DIR:-/tmp/gcsfuse-conformance/report}"
 export TEST_WITH_NATIVE_SIDECAR="${TEST_WITH_NATIVE_SIDECAR:-false}"
