@@ -209,7 +209,12 @@ func (d *ossDriver) PrepareTest(ctx context.Context, f *e2eframework.Framework) 
 	})
 
 	return &storageframework.PerTestConfig{
-		Driver:    d,
+		Driver: d,
+		// PerTestConfig.Prefix is inserted as the first part of dynamically
+		// generated pod/path names (e.g. "<prefix>-injector"). Left empty, it
+		// produces invalid names like "-injector" and every test that injects
+		// content into a pre-provisioned volume fails outright.
+		Prefix:    "gcsfuse-oss",
 		Framework: f,
 	}
 }
