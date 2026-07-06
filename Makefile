@@ -350,5 +350,17 @@ build-e2e-test:
 e2e-test:
 	./test/e2e/run-e2e-local.sh
 
+# k8s-integration-test runs the upstream Kubernetes external-storage
+# conformance suite (from github.com/kubernetes/kubernetes) against the GCS
+# Fuse CSI driver using the driver-definition mechanism (--storage.testdriver).
+# Requires BUCKET_NAME to be set to a pre-existing GCS bucket the cluster's
+# workload identity can access. All other options are configurable via env vars
+# documented in test/k8s-integration/run.sh.
+#
+# Example (GKE):
+#   BUCKET_NAME=my-test-bucket make k8s-integration-test
+k8s-integration-test:
+	./test/k8s-integration/run.sh
+
 perf-test:
 	$(MAKE) e2e-test E2E_TEST_USE_MANAGED_DRIVER=true E2E_TEST_GINKGO_TIMEOUT=3h E2E_TEST_SKIP= E2E_TEST_FOCUS=should.succeed.in.performance.test E2E_TEST_GINKGO_FLAKE_ATTEMPTS=1
