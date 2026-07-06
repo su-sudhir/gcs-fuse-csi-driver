@@ -1,0 +1,41 @@
+# Driver-definition YAML for the upstream Kubernetes external-storage conformance suite.
+# Used by run.sh as: e2e.test --storage.testdriver=<rendered copy of this file>
+#
+# Template variables (substituted by envsubst in run.sh):
+#   ${BUCKET_NAME}              — pre-existing GCS bucket
+#   ${SKIP_BUCKET_ACCESS_CHECK} — set to "true" to bypass driver-level admission check
+#
+# NOTE: This requires an OSS (non-GKE) cluster with both admission webhooks deployed by
+# setup-webhook.sh. On GKE private clusters user webhooks are never called (GKE warden at
+# localhost:5443 intercepts all pod admission), so upstream e2e.test pods never get the
+# gke-gcsfuse/volumes annotation and sidecar injection fails.
+
+DriverInfo:
+  Name: gcsfuse.csi.storage.gke.io
+  SupportedFsType:
+    "": {}
+  Capabilities:
+    persistence: true
+    exec: true
+    multipods: true
+    # RWX enables ReadWriteMany PVC tests (multiple pods mounting the same bucket).
+    RWX: true
+  SupportedSizeRange:
+    Min: 1Ki
+
+# InlineVolumes enables the CSI ephemeral volume test patterns.
+# The upstream suite creates pods with these volume attributes; setup-webhook.sh's
+# annotator webhook adds gke-gcsfuse/volumes: "true" automatically, triggering
+# the GCS Fuse sidecar-injector webhook to inject the sidecar container.
+InlineVolumes:
+- Attributes:
+    bucketName: "${BUCKET_NAME}"
+    mountOptions: "logging:severity:info"
+    skipCSIBucketAccessCheck: "${SKIP_BUCKET_ACCESS_CHECK}"
+  Shared: true
+  ReadOnly: false
+
+# NOTE: PreprovisionedVolumes is NOT supported by the driverDefinition YAML schema.
+# The upstream external driver only supports InlineVolumes (CSI ephemeral) and
+# StorageClass-based dynamic provisioning. To run PreprovisionedPV tests, a custom
+# Go test driver implementing framework.PreprovisionedPVTestDriver would be needed.
