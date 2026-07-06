@@ -139,17 +139,33 @@ var _ = ginkgo.Describe("Conformance Test Suite", func() {
 	// management.
 	testDriver := initOSSDriver(*project)
 
-	// Testsuites that exercise the core volume lifecycle including
-	// PreprovisionedPV, CSI ephemeral, and multi-volume patterns.
-	//
-	// Excluded (require GKE-specific infrastructure):
-	//   - InitGcsFuseMountTestSuite: needs TEST_WITH_SA_VOL_INJECTION (Workload Identity)
-	//   - InitGcsFuseCSIFailedMountTestSuite: needs SA injection + error-file cleanup paths
-	//   - InitGcsFuseCSIWorkloadsTestSuite, OIDC, Profiles, Metrics, Istio, WIF: GKE-only
+	// All registered testsuites. Some assume a *specs.GCSFuseCSITestDriver
+	// (file_cache, gcsfuse_integration*) or GKE-only infrastructure (mount,
+	// failed_mount, workloads, oidc, profiles, metrics, istio, WIF) that
+	// ossDriver doesn't provide — those specs are expected to fail cleanly
+	// on a type assertion or missing setup rather than validate anything,
+	// but are included for visibility into exactly what breaks and how.
 	conformanceSuites := []func() storageframework.TestSuite{
 		testsuites.InitGcsFuseCSIVolumesTestSuite,
 		testsuites.InitGcsFuseCSIMultiVolumeTestSuite,
 		testsuites.InitGcsFuseCSISubPathTestSuite,
+		testsuites.InitGcsFuseCSICloudProfilerTestSuite,
+		testsuites.InitGcsFuseCSIFailedMountTestSuite,
+		testsuites.InitGcsFuseCSIGCSFuseIntegrationFileCacheParallelDownloadsTestSuite,
+		testsuites.InitGcsFuseCSIAutoTerminationTestSuite,
+		testsuites.InitGcsFuseCSIGCSFuseIntegrationTestSuite,
+		testsuites.InitGcsFuseCSIGCSFuseIntegrationFileCacheTestSuite,
+		testsuites.InitGcsFuseCSIFileCacheTestSuite,
+		testsuites.InitGcsFuseKernelParamsTestSuite,
+		testsuites.InitGcsFuseMountTestSuite,
+		testsuites.InitGcsFuseCSIIstioTestSuite,
+		testsuites.InitGcsFuseCSIMetadataPrefetchTestSuite,
+		testsuites.InitGcsFuseCSIMetricsTestSuite,
+		testsuites.InitGcsFuseCSIWorkloadsTestSuite,
+		testsuites.InitGcsFuseCSIOIDCTestSuite,
+		testsuites.InitGcsFuseCSIProfilesTestSuite,
+		testsuites.InitGcsFuseCSIPerformanceTestSuite,
+		testsuites.InitGcsFuseCSIWorkloadIdentityFederationTestSuite,
 	}
 
 	ginkgo.Context(fmt.Sprintf("[Driver: %s]", testDriver.GetDriverInfo().Name), func() {

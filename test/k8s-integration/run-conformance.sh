@@ -44,7 +44,13 @@
 #   WIF_POOL_ID           (default: wi-pool-k8s-cluster)
 #   GINKGO_FOCUS          (default: "" — runs all conformance suites)
 #   GINKGO_SKIP           (default: "Performance|Disruptive")
-#   GINKGO_PROCS          (default: 4)
+#   GINKGO_PROCS          (default: 4) — number of parallel Ginkgo processes.
+#                         Each process gets its own namespace, bucket, and WIF
+#                         binding, so specs run genuinely in parallel rather
+#                         than just interleaved within one process. Requires
+#                         the `ginkgo` CLI (matching the version pinned in
+#                         test/go.mod) on PATH; install with:
+#                           go install github.com/onsi/ginkgo/v2/ginkgo@<version>
 #   GINKGO_TIMEOUT        (default: 2h)
 #   REPORT_DIR            (default: /tmp/gcsfuse-conformance/report)
 #   TEST_WITH_NATIVE_SIDECAR  (default: false)
@@ -86,6 +92,7 @@ readonly GINKGO_FOCUS="${GINKGO_FOCUS:-}"
 # "same bucket from different Pods" now works because all pods in a test share the same
 # per-test bucket rather than being isolated into separate only-dir subdirectories.
 readonly GINKGO_SKIP="${GINKGO_SKIP:-Performance|Disruptive|Dynamic PV|custom sidecar container image|in init container|should support existing paths|should support files as paths|multiple GCS buckets via the same volume|subPath|custom buffer volume}"
+readonly GINKGO_PROCS="${GINKGO_PROCS:-4}"
 readonly GINKGO_TIMEOUT="${GINKGO_TIMEOUT:-4h}"
 readonly REPORT_DIR="${REPORT_DIR:-/tmp/gcsfuse-conformance/report}"
 export TEST_WITH_NATIVE_SIDECAR="${TEST_WITH_NATIVE_SIDECAR:-false}"
@@ -93,17 +100,22 @@ export WIF_POOL_ID="${WIF_POOL_ID:-wi-pool-k8s-cluster}"
 
 mkdir -p "${REPORT_DIR}"
 
-# ── Step 1: build the conformance test binary ─────────────────────────────────
-readonly BINARY="${REPORT_DIR}/gcsfuse-conformance.test"
-
-echo "Building conformance test binary..."
-(
-  cd "${TEST_DIR}"
-  go test -c \
-    -o "${BINARY}" \
-    ./k8s-integration/conformance/
-)
-echo "Built: ${BINARY}"
+# ── Step 1: locate a matching ginkgo CLI ───────────────────────────────────────
+# Real multi-process parallelism (GINKGO_PROCS > 1) requires the `ginkgo` CLI:
+# a plain `go test -c` binary only supports a single process. A CLI version
+# that doesn't match test/go.mod's github.com/onsi/ginkgo/v2 causes flag
+# parsing errors, so check the version even if `ginkgo` is already on PATH.
+readonly GINKGO_VERSION="$(cd "${TEST_DIR}" && go list -m -f '{{.Version}}' github.com/onsi/ginkgo/v2)"
+readonly GOBIN="${GOBIN:-$(go env GOPATH)/bin}"
+current_ginkgo_version=""
+if command -v ginkgo >/dev/null 2>&1; then
+  current_ginkgo_version="v$(ginkgo version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+fi
+if [[ "${current_ginkgo_version}" != "${GINKGO_VERSION}" ]]; then
+  echo "ginkgo CLI (${current_ginkgo_version:-none}) does not match test/go.mod (${GINKGO_VERSION}); installing..."
+  go install "github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION}"
+  export PATH="${GOBIN}:${PATH}"
+fi
 
 # ── Step 2: run ───────────────────────────────────────────────────────────────
 echo ""
@@ -113,26 +125,29 @@ echo "  Zone           : ${GCP_ZONE}"
 echo "  WIF pool       : ${WIF_POOL_ID}"
 echo "  Focus          : ${GINKGO_FOCUS:-<all>}"
 echo "  Skip           : ${GINKGO_SKIP}"
+echo "  Procs          : ${GINKGO_PROCS}"
 echo "  Native sidecar : ${TEST_WITH_NATIVE_SIDECAR}"
 echo ""
 
 focus_flag=""
 if [[ -n "${GINKGO_FOCUS}" ]]; then
-  focus_flag="--ginkgo.focus=${GINKGO_FOCUS}"
+  focus_flag="--focus=${GINKGO_FOCUS}"
 fi
 
-# --ginkgo.timeout controls Ginkgo's own suite timeout (default: 1h) and IS accepted
-# by compiled test binaries.  -test.timeout is the outer Go test process timeout and
-# should be set slightly higher so Ginkgo gets a chance to print its summary on expiry.
-"${BINARY}" \
-  -test.v \
-  -test.timeout="$((${GINKGO_TIMEOUT%h} + 1))h" \
-  ${focus_flag} \
-  --ginkgo.skip="${GINKGO_SKIP}" \
-  --ginkgo.timeout="${GINKGO_TIMEOUT}" \
-  --ginkgo.v \
-  --ginkgo.junit-report="${REPORT_DIR}/junit_conformance.xml" \
-  --ginkgo.json-report="${REPORT_DIR}/report_conformance.json" \
-  --project="${GCP_PROJECT}" \
-  --zone="${GCP_ZONE}" \
-  --kubeconfig="${KUBECONFIG}"
+(
+  cd "${TEST_DIR}"
+  ginkgo \
+    -v \
+    --timeout="${GINKGO_TIMEOUT}" \
+    --skip="${GINKGO_SKIP}" \
+    --procs="${GINKGO_PROCS}" \
+    --junit-report=junit_conformance.xml \
+    --json-report=report_conformance.json \
+    --output-dir="${REPORT_DIR}" \
+    ${focus_flag} \
+    ./k8s-integration/conformance/ \
+    -- \
+    --project="${GCP_PROJECT}" \
+    --zone="${GCP_ZONE}" \
+    --kubeconfig="${KUBECONFIG}"
+)
