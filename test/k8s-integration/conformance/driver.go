@@ -35,17 +35,20 @@ import (
 	"os"
 	"strings"
 
+	"local/test/e2e/utils"
+
 	"cloud.google.com/go/iam"
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
 	"github.com/onsi/ginkgo/v2"
 	"google.golang.org/api/iterator"
+	storagev1 "k8s.io/api/storage/v1"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	e2eframework "k8s.io/kubernetes/test/e2e/framework"
-	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	e2evolume "k8s.io/kubernetes/test/e2e/framework/volume"
 	storageframework "k8s.io/kubernetes/test/e2e/storage/framework"
 )
@@ -91,6 +94,7 @@ type ossDriver struct {
 var _ storageframework.TestDriver = &ossDriver{}
 var _ storageframework.PreprovisionedPVTestDriver = &ossDriver{}
 var _ storageframework.EphemeralTestDriver = &ossDriver{}
+var _ storageframework.DynamicPVTestDriver = &ossDriver{}
 
 func initOSSDriver(projectID string) storageframework.TestDriver {
 	gcsClient, err := storage.NewClient(context.Background())
@@ -121,9 +125,59 @@ func (d *ossDriver) GetDriverInfo() *storageframework.DriverInfo {
 	return &d.driverInfo
 }
 
-func (d *ossDriver) SkipUnsupportedTest(pattern storageframework.TestPattern) {
-	if pattern.VolType == storageframework.DynamicPV {
-		e2eskipper.Skipf("GCS Fuse has no CSI provisioner — dynamic PV tests not supported")
+func (d *ossDriver) SkipUnsupportedTest(_ storageframework.TestPattern) {}
+
+// provisionerSecretName is the k8s Secret name the dynamically-provisioned
+// StorageClass points the CSI controller's CreateVolume/DeleteVolume calls at.
+const provisionerSecretName = "gcsfuse-provisioner-secret"
+
+// GetDynamicProvisionStorageClass satisfies storageframework.DynamicPVTestDriver.
+// GCS Fuse's CreateVolume RPC provisions a brand-new bucket per PVC, which
+// needs project-level bucket create/delete (roles/storage.admin) — a bigger
+// grant than the bucket-scoped objectAdmin PrepareTest binds for
+// pre-provisioned/ephemeral volumes. Bind it here, per test, and revoke it in
+// DeferCleanup, mirroring the GKE Workload Identity pattern in
+// test/e2e/specs/testdriver.go's GetDynamicProvisionStorageClass.
+func (d *ossDriver) GetDynamicProvisionStorageClass(ctx context.Context, config *storageframework.PerTestConfig, _ string) *storagev1.StorageClass {
+	namespace := config.Framework.Namespace.Name
+	member := fmt.Sprintf(
+		"principal://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/subject/system:serviceaccount:%s:%s",
+		wifProjectNumber(), wifPoolID(), namespace, serviceAccountName)
+
+	binding := utils.NewTestGCPProjectIAMPolicyBinding(d.projectID, member, "roles/storage.admin", "")
+	binding.Create(ctx)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: provisionerSecretName},
+		StringData: map[string]string{
+			"projectID":               d.projectID,
+			"serviceAccountName":      serviceAccountName,
+			"serviceAccountNamespace": namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+	}
+	if _, err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		e2eframework.Failf("failed to create provisioner secret %s/%s: %v", namespace, provisionerSecretName, err)
+	}
+
+	ginkgo.DeferCleanup(func(ctx context.Context) {
+		if err := config.Framework.ClientSet.CoreV1().Secrets(namespace).Delete(ctx, provisionerSecretName, metav1.DeleteOptions{}); err != nil {
+			e2eframework.Logf("failed to delete provisioner secret %s/%s: %v", namespace, provisionerSecretName, err)
+		}
+		binding.Cleanup(ctx)
+	})
+
+	parameters := map[string]string{
+		"csi.storage.k8s.io/provisioner-secret-name":      provisionerSecretName,
+		"csi.storage.k8s.io/provisioner-secret-namespace": "${pvc.namespace}",
+	}
+	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
+
+	return &storagev1.StorageClass{
+		ObjectMeta:        metav1.ObjectMeta{GenerateName: "gcsfuse-oss-dynamic-sc-"},
+		Provisioner:       csiDriver,
+		Parameters:        parameters,
+		VolumeBindingMode: &bindingMode,
 	}
 }
 
