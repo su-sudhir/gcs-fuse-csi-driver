@@ -33,9 +33,13 @@
 #
 # Volume detection:
 #   - Inline CSI volumes: detected directly from pod spec (spec.volumes[].csi.driver)
-#   - PVC-backed volumes: detected by calling the k8s API to resolve
-#     PVC → bound PV → check spec.csi.driver. Requires RBAC permission to
-#     get persistentvolumeclaims and persistentvolumes (see setup-webhook.sh).
+#   - PVC-backed volumes: detected via the PVC's StorageClass provisioner (works
+#     immediately, before binding) with a fallback to resolving PVC → bound PV →
+#     spec.csi.driver for statically pre-bound PVs with no StorageClass.
+#   - GenericEphemeralVolume (spec.volumes[].ephemeral.volumeClaimTemplate):
+#     detected via its embedded storageClassName, no PVC/PV lookup needed.
+#   Requires RBAC permission to get persistentvolumeclaims, persistentvolumes,
+#   and storageclasses.storage.k8s.io (see setup-webhook.sh).
 #
 # Deployment:
 #   This script is stored in a ConfigMap and run inside a Deployment by
@@ -91,12 +95,30 @@ def _k8s_get(path: str) -> dict:
         return {}
 
 
+def _storageclass_uses_gcsfuse(sc_name: str) -> bool:
+    """Return True if the named StorageClass provisions via the GCS Fuse driver."""
+    if not sc_name:
+        return False
+    sc = _k8s_get(f"/apis/storage.k8s.io/v1/storageclasses/{sc_name}")
+    return sc.get("provisioner") == GCSFUSE_DRIVER
+
+
 def _pvc_uses_gcsfuse(pvc_name: str, namespace: str) -> bool:
-    """Return True if the named PVC is backed by a GCS Fuse PersistentVolume."""
+    """Return True if the named PVC is backed by GCS Fuse.
+
+    Checks the PVC's StorageClass first: dynamically-provisioned PVCs using
+    VolumeBindingWaitForFirstConsumer aren't bound to a PV yet at
+    pod-admission time (binding only happens once the pod is scheduled), so
+    resolving through the bound PV would always miss them. The StorageClass
+    is known immediately regardless of binding state.
+    """
     pvc = _k8s_get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}")
+    if _storageclass_uses_gcsfuse(pvc.get("spec", {}).get("storageClassName", "")):
+        return True
     pv_name = pvc.get("spec", {}).get("volumeName", "")
     if not pv_name:
-        # PVC not yet bound — cannot confirm; skip annotation to avoid misfire.
+        # Not dynamically provisioned by GCS Fuse, and not yet bound to any PV —
+        # cannot confirm; skip annotation to avoid misfire.
         log.debug("PVC %s/%s not yet bound, skipping annotation", namespace, pvc_name)
         return False
     pv = _k8s_get(f"/api/v1/persistentvolumes/{pv_name}")
@@ -104,14 +126,25 @@ def _pvc_uses_gcsfuse(pvc_name: str, namespace: str) -> bool:
 
 
 def pod_has_gcsfuse_volume(spec: dict, namespace: str) -> bool:
-    """Return True if the pod contains any GCS Fuse volume (inline or PVC-backed)."""
+    """Return True if the pod contains any GCS Fuse volume (inline, PVC-backed, or ephemeral)."""
     for vol in spec.get("volumes", []):
         # Inline CSI ephemeral volume — driver name is directly in the pod spec.
         if vol.get("csi", {}).get("driver") == GCSFUSE_DRIVER:
             return True
-        # PVC-backed volume — must resolve through the API to find the CSI driver.
+        # PVC-backed volume — must resolve through the API to find the CSI driver
+        # or StorageClass provisioner.
         pvc_name = vol.get("persistentVolumeClaim", {}).get("claimName")
         if pvc_name and _pvc_uses_gcsfuse(pvc_name, namespace):
+            return True
+        # GenericEphemeralVolume — the StorageClass name is embedded directly in
+        # the pod spec's volume template, so no PVC/PV lookup is needed at all.
+        eph_sc = (
+            vol.get("ephemeral", {})
+            .get("volumeClaimTemplate", {})
+            .get("spec", {})
+            .get("storageClassName", "")
+        )
+        if _storageclass_uses_gcsfuse(eph_sc):
             return True
     return False
 

@@ -206,6 +206,9 @@ rules:
 - apiGroups: [""]
   resources: ["persistentvolumeclaims", "persistentvolumes"]
   verbs: ["get"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
