@@ -183,10 +183,15 @@ func (d *ossDriver) GetDynamicProvisionStorageClass(ctx context.Context, config 
 	}
 }
 
-// serviceAccountName mirrors specs.K8sServiceAccountName.  On GKE this SA is
-// created by Workload Identity setup; on OSS clusters we create it here so the
-// pod admission controller doesn't reject the pod before the volume is mounted.
-const serviceAccountName = "gcsfuse-csi-sa"
+// serviceAccountName is "default" because the upstream storage testsuites we
+// run (test/e2e/framework/pod, volume/fixtures.go, etc.) create test pods
+// with no explicit spec.serviceAccountName, which the k8s API server then
+// defaults to the namespace's "default" ServiceAccount. Since we don't
+// control pod creation in these generic upstream helpers (unlike our own
+// removed custom suites, which explicitly set serviceAccountName), WIF
+// bindings must target "default" — anything else never applies to the pods
+// that actually mount volumes, causing NodePublishVolume PermissionDenied.
+const serviceAccountName = "default"
 
 func (d *ossDriver) PrepareTest(ctx context.Context, f *e2eframework.Framework) *storageframework.PerTestConfig {
 	sa := &corev1.ServiceAccount{
