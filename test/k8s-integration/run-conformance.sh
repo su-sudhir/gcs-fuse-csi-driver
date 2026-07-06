@@ -21,9 +21,18 @@
 # Requires:
 #   - Go 1.21+
 #   - KUBECONFIG pointing at the OSS cluster
-#   - GCP credentials (ADC) with GCS bucket create/delete and object admin on
-#     the target project
+#   - GCP credentials (ADC) with GCS bucket create/delete on the target project
 #   - setup-webhook.sh already run on the cluster (annotator + sidecar-injector)
+#   - One-time IAM setup: the cluster node service account needs
+#     roles/storage.admin at the project level so the test binary (which runs
+#     on the cluster master and inherits the node's ADC) can create and
+#     delete per-test buckets:
+#       gcloud projects add-iam-policy-binding "${GCP_PROJECT}" \
+#         --member="serviceAccount:<node-sa>@developer.gserviceaccount.com" \
+#         --role=roles/storage.admin
+#     Per-test IAM bindings from each namespace's gcsfuse-csi-sa KSA onto its
+#     own bucket (via Workload Identity Federation) are handled automatically
+#     by the test driver — no per-test setup required.
 #
 # Required env vars:
 #   GCP_PROJECT   — GCP project ID (bucket creation)
@@ -32,6 +41,7 @@
 # Optional env vars:
 #   KUBECONFIG            (default: ~/.kube/config)
 #   BUCKET_LOCATION       (default: us-central1)
+#   WIF_POOL_ID           (default: wi-pool-k8s-cluster)
 #   GINKGO_FOCUS          (default: "" — runs all conformance suites)
 #   GINKGO_SKIP           (default: "Performance|Disruptive")
 #   GINKGO_PROCS          (default: 4)
@@ -79,6 +89,7 @@ readonly GINKGO_SKIP="${GINKGO_SKIP:-Performance|Disruptive|Dynamic PV|custom si
 readonly GINKGO_TIMEOUT="${GINKGO_TIMEOUT:-4h}"
 readonly REPORT_DIR="${REPORT_DIR:-/tmp/gcsfuse-conformance/report}"
 export TEST_WITH_NATIVE_SIDECAR="${TEST_WITH_NATIVE_SIDECAR:-false}"
+export WIF_POOL_ID="${WIF_POOL_ID:-wi-pool-k8s-cluster}"
 
 mkdir -p "${REPORT_DIR}"
 
@@ -99,6 +110,7 @@ echo ""
 echo "Running GCS Fuse CSI driver conformance tests"
 echo "  Project        : ${GCP_PROJECT}"
 echo "  Zone           : ${GCP_ZONE}"
+echo "  WIF pool       : ${WIF_POOL_ID}"
 echo "  Focus          : ${GINKGO_FOCUS:-<all>}"
 echo "  Skip           : ${GINKGO_SKIP}"
 echo "  Native sidecar : ${TEST_WITH_NATIVE_SIDECAR}"
