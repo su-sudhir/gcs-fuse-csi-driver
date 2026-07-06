@@ -48,6 +48,12 @@ spec:
             - "--enable-auto-gomemlimit=true"
             - "--auto-gomemlimit-ratio=0.95"
             # TODO(urielguzman): Add universe-domain to support profiles.
+            # Required for dynamic provisioning (CreateVolume) on non-GKE clusters that
+            # authenticate via Workload Identity Federation: without these, the driver
+            # requests a k8s ServiceAccount token with an empty audience, which Google's
+            # STS token exchange rejects with "Invalid value for audience".
+            - "--identity-pool=//iam.googleapis.com/projects/$(PROJECT_NUMBER)/locations/global/workloadIdentityPools/wi-pool-k8s-cluster"
+            - "--identity-provider=//iam.googleapis.com/projects/$(PROJECT_NUMBER)/locations/global/workloadIdentityPools/wi-pool-k8s-cluster/providers/wi-p-k8s-cluster"
           ports:
             - containerPort: 29633
               name: http-endpoint
