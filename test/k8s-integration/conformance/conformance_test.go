@@ -98,8 +98,9 @@ var _ = func() bool {
 	setDefaultEnv(utils.TestWithNativeSidecarEnvVar, "false")
 	// SA volume injection requires GKE Workload Identity — not available on OSS.
 	setDefaultEnv(utils.TestWithSAVolumeInjectionEnvVar, "false")
-	// Sidecar bucket access check — skip by default on OSS (no WI binding).
-	setDefaultEnv(utils.TestWithSidecarBucketAccessCheckEnvVar, "false")
+	// Sidecar bucket access check — enabled now that each test namespace's
+	// gcsfuse-csi-sa KSA is bound to its bucket via WIF.
+	setDefaultEnv(utils.TestWithSidecarBucketAccessCheckEnvVar, "true")
 	// Error file clean-up — safe to enable on OSS.
 	setDefaultEnv(utils.TestWithErrorFileCleanUpEnvVar, "true")
 	// Cluster metadata env vars used by some testsuites for labels/logging.

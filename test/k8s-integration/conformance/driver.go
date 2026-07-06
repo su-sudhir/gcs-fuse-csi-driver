@@ -37,6 +37,7 @@ import (
 	"os"
 	"strings"
 
+	"cloud.google.com/go/iam"
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
 	"github.com/onsi/ginkgo/v2"
@@ -54,11 +55,17 @@ import (
 const (
 	csiDriver          = "gcsfuse.csi.storage.gke.io"
 	bucketNameEnv      = "BUCKET_NAME"
-	keySkipBucketCheck = "skipCSIBucketAccessCheck"
 	keyBucketName      = "bucketName"
 	keyMountOptions    = "mountOptions"
 	testBucketLocation = "us-central1"
 	implicitDirObject  = "implicit-dir/placeholder"
+
+	// WIF pool used by test namespace KSAs to authenticate as GCS principals.
+	// Override via env vars for other clusters.
+	wifPoolIDEnv        = "WIF_POOL_ID"
+	defaultWIFPoolID    = "wi-pool-k8s-cluster"
+	wifProjectNumberEnv = "WIF_PROJECT_NUMBER"
+	defaultWIFProjectNo = "202500739588"
 )
 
 // ossTestVolume holds the per-test state.
@@ -140,6 +147,7 @@ func (d *ossDriver) PrepareTest(ctx context.Context, f *e2eframework.Framework) 
 
 	bucket := d.createBucket(ctx, f.Namespace.Name)
 	seedBucket(ctx, d.gcsClient, bucket)
+	bindWorkloadIdentity(ctx, d.gcsClient, bucket, f.Namespace.Name)
 	d.buckets[f.Namespace.Name] = bucket
 	ginkgo.DeferCleanup(func(ctx context.Context) {
 		deleteBucket(ctx, d.gcsClient, bucket)
@@ -167,6 +175,39 @@ func seedBucket(ctx context.Context, client *storage.Client, bucket string) {
 	if err := w.Close(); err != nil {
 		e2eframework.Failf("failed to seed bucket %q: %v", bucket, err)
 	}
+}
+
+// bindWorkloadIdentity grants the test namespace's gcsfuse-csi-sa KSA
+// (authenticating via the cluster's WIF pool) objectAdmin on the bucket, so
+// the CSI driver's IAM access check passes without relying on node ADC.
+func bindWorkloadIdentity(ctx context.Context, client *storage.Client, bucket, namespace string) {
+	member := fmt.Sprintf(
+		"principal://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/subject/system:serviceaccount:%s:%s",
+		wifProjectNumber(), wifPoolID(), namespace, serviceAccountName)
+
+	bh := client.Bucket(bucket)
+	policy, err := bh.IAM().Policy(ctx)
+	if err != nil {
+		e2eframework.Failf("failed to get IAM policy for bucket %q: %v", bucket, err)
+	}
+	policy.Add(member, iam.RoleName("roles/storage.objectAdmin"))
+	if err := bh.IAM().SetPolicy(ctx, policy); err != nil {
+		e2eframework.Failf("failed to set IAM policy for bucket %q: %v", bucket, err)
+	}
+}
+
+func wifPoolID() string {
+	if v := os.Getenv(wifPoolIDEnv); v != "" {
+		return v
+	}
+	return defaultWIFPoolID
+}
+
+func wifProjectNumber() string {
+	if v := os.Getenv(wifProjectNumberEnv); v != "" {
+		return v
+	}
+	return defaultWIFProjectNo
 }
 
 // deleteBucket deletes all objects in the bucket, then the bucket itself.
@@ -220,9 +261,8 @@ func (d *ossDriver) GetPersistentVolumeSource(readOnly bool, _ string, vol stora
 			VolumeHandle: v.bucket + ":" + v.subDir,
 			ReadOnly:     readOnly,
 			VolumeAttributes: map[string]string{
-				keyBucketName:      v.bucket,
-				keySkipBucketCheck: "true",
-				keyMountOptions:    mountOpts(v.subDir, readOnly, v.implicitDirs, v.nonRoot),
+				keyBucketName:   v.bucket,
+				keyMountOptions: mountOpts(v.subDir, readOnly, v.implicitDirs, v.nonRoot),
 			},
 		},
 	}, nil
@@ -239,9 +279,8 @@ func (d *ossDriver) GetVolume(config *storageframework.PerTestConfig, _ int) (ma
 	implicitDirs := strings.Contains(config.Prefix, "implicit-dirs")
 	nonRoot := strings.Contains(config.Prefix, "non-root")
 	return map[string]string{
-		keyBucketName:      d.bucket,
-		keySkipBucketCheck: "true",
-		keyMountOptions:    mountOpts(subDir, false, implicitDirs, nonRoot),
+		keyBucketName:   d.bucket,
+		keyMountOptions: mountOpts(subDir, false, implicitDirs, nonRoot),
 	}, true /* shared */, false /* readOnly */
 }
 
