@@ -137,7 +137,7 @@ var _ = ginkgo.Describe("Conformance Test Suite", func() {
 	// ossDriver creates a fresh GCS bucket per test namespace using the
 	// GCE node's ADC (Application Default Credentials) for bucket
 	// management.
-	testDriver := initOSSDriver(bucketFromEnv(), *project)
+	testDriver := initOSSDriver(*project)
 
 	// Testsuites that exercise the core volume lifecycle including
 	// PreprovisionedPV, CSI ephemeral, and multi-volume patterns.

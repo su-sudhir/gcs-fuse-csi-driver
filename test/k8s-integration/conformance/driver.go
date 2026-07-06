@@ -18,12 +18,10 @@ package conformance
 
 // ossDriver is a minimal GCS Fuse test driver for OSS (non-GKE) clusters.
 //
-// Unlike the full GCSFuseCSITestDriver in test/e2e/specs/, this driver:
-//   - Does NOT set up Workload Identity or GCP Service Accounts (not available on OSS).
-//   - Uses a single pre-existing GCS bucket with per-test subdirectory isolation
-//     via gcsfuse's "only-dir=<uuid>" mount option.
-//   - Sets skipCSIBucketAccessCheck=true so the CSI driver skips the IAM check
-//     and relies on the GCE node's ADC (Application Default Credentials) for auth.
+// Unlike the full GCSFuseCSITestDriver in test/e2e/specs/, this driver
+// creates a dedicated GCS bucket per test namespace and binds that
+// namespace's gcsfuse-csi-sa KSA to it via Workload Identity Federation,
+// rather than relying on GKE-managed Workload Identity.
 //
 // Implements:
 //   - storageframework.TestDriver                 (mandatory)
@@ -54,7 +52,6 @@ import (
 
 const (
 	csiDriver          = "gcsfuse.csi.storage.gke.io"
-	bucketNameEnv      = "BUCKET_NAME"
 	keyBucketName      = "bucketName"
 	keyMountOptions    = "mountOptions"
 	testBucketLocation = "us-central1"
@@ -70,8 +67,12 @@ const (
 
 // ossTestVolume holds the per-test state.
 type ossTestVolume struct {
-	bucket       string
-	subDir       string
+	bucket string
+	// handleSuffix disambiguates the VolumeHandle when a single test creates
+	// more than one volume against the same per-test bucket. Without this,
+	// two PVs sharing a handle cause the kubelet to skip the second
+	// NodePublishVolume call, leaving one volume permanently unmounted.
+	handleSuffix string
 	implicitDirs bool
 	nonRoot      bool
 }
@@ -81,7 +82,6 @@ func (v *ossTestVolume) DeleteVolume(_ context.Context) {}
 // ossDriver implements the required storageframework interfaces.
 type ossDriver struct {
 	driverInfo storageframework.DriverInfo
-	bucket     string
 	gcsClient  *storage.Client
 	projectID  string
 	buckets    map[string]string // namespace -> per-test bucket name
@@ -92,13 +92,12 @@ var _ storageframework.TestDriver = &ossDriver{}
 var _ storageframework.PreprovisionedPVTestDriver = &ossDriver{}
 var _ storageframework.EphemeralTestDriver = &ossDriver{}
 
-func initOSSDriver(bucket, projectID string) storageframework.TestDriver {
+func initOSSDriver(projectID string) storageframework.TestDriver {
 	gcsClient, err := storage.NewClient(context.Background())
 	if err != nil {
 		ginkgo.Fail(fmt.Sprintf("failed to create GCS client: %v", err))
 	}
 	return &ossDriver{
-		bucket:    bucket,
 		gcsClient: gcsClient,
 		projectID: projectID,
 		buckets:   map[string]string{},
@@ -231,13 +230,13 @@ func deleteBucket(ctx context.Context, client *storage.Client, bucket string) {
 	}
 }
 
-// CreateVolume allocates a unique subdirectory in the shared bucket for isolation.
+// CreateVolume returns a volume pointing at the calling test's per-namespace bucket.
 func (d *ossDriver) CreateVolume(_ context.Context, config *storageframework.PerTestConfig, volType storageframework.TestVolType) storageframework.TestVolume {
 	switch volType {
 	case storageframework.PreprovisionedPV, storageframework.CSIInlineVolume:
 		return &ossTestVolume{
-			bucket:       d.bucket,
-			subDir:       uuid.NewString(),
+			bucket:       d.buckets[config.Framework.Namespace.Name],
+			handleSuffix: uuid.NewString(),
 			implicitDirs: strings.Contains(config.Prefix, "implicit-dirs"),
 			nonRoot:      strings.Contains(config.Prefix, "non-root"),
 		}
@@ -253,16 +252,13 @@ func (d *ossDriver) GetPersistentVolumeSource(readOnly bool, _ string, vol stora
 	return &corev1.PersistentVolumeSource{
 		CSI: &corev1.CSIPersistentVolumeSource{
 			Driver: csiDriver,
-			// Use "bucket:subDir" so each PV gets a unique VolumeHandle.  Without this,
-			// two PVs from the same bucket share a handle and the kubelet skips the
-			// second NodePublishVolume call, leaving one volume permanently unmounted.
 			// The CSI driver's ParseVolumeID strips ":<suffix>" via regex /:.*$/,
-			// so it still resolves to the correct bucket name.
-			VolumeHandle: v.bucket + ":" + v.subDir,
+			// so this still resolves to the correct bucket name.
+			VolumeHandle: v.bucket + ":" + v.handleSuffix,
 			ReadOnly:     readOnly,
 			VolumeAttributes: map[string]string{
 				keyBucketName:   v.bucket,
-				keyMountOptions: mountOpts(v.subDir, readOnly, v.implicitDirs, v.nonRoot),
+				keyMountOptions: mountOpts(readOnly, v.implicitDirs, v.nonRoot),
 			},
 		},
 	}, nil
@@ -275,17 +271,16 @@ func (d *ossDriver) GetCSIDriverName(_ *storageframework.PerTestConfig) string {
 
 // GetVolume returns inline CSI ephemeral volume attributes (EphemeralTestDriver).
 func (d *ossDriver) GetVolume(config *storageframework.PerTestConfig, _ int) (map[string]string, bool, bool) {
-	subDir := uuid.NewString()
 	implicitDirs := strings.Contains(config.Prefix, "implicit-dirs")
 	nonRoot := strings.Contains(config.Prefix, "non-root")
 	return map[string]string{
-		keyBucketName:   d.bucket,
-		keyMountOptions: mountOpts(subDir, false, implicitDirs, nonRoot),
+		keyBucketName:   d.buckets[config.Framework.Namespace.Name],
+		keyMountOptions: mountOpts(false, implicitDirs, nonRoot),
 	}, true /* shared */, false /* readOnly */
 }
 
-func mountOpts(subDir string, readOnly bool, implicitDirs bool, nonRoot bool) string {
-	opts := fmt.Sprintf("only-dir=%s,logging:severity:info", subDir)
+func mountOpts(readOnly, implicitDirs, nonRoot bool) string {
+	opts := "logging:severity:info"
 	if readOnly {
 		opts += ",ro"
 	}
@@ -298,13 +293,4 @@ func mountOpts(subDir string, readOnly bool, implicitDirs bool, nonRoot bool) st
 		opts += ",uid=1001,gid=2002"
 	}
 	return opts
-}
-
-// bucketFromEnv reads BUCKET_NAME or fatals — called once at suite start.
-func bucketFromEnv() string {
-	b := os.Getenv(bucketNameEnv)
-	if b == "" {
-		ginkgo.Fail(fmt.Sprintf("env var %s must be set to a pre-existing GCS bucket", bucketNameEnv))
-	}
-	return b
 }

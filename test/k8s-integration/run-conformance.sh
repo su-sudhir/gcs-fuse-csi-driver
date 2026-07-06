@@ -50,8 +50,6 @@ readonly TEST_DIR="${REPO_ROOT}/test"
 # ── Required ──────────────────────────────────────────────────────────────────
 : "${GCP_PROJECT:?GCP_PROJECT must be set to your GCP project ID}"
 : "${GCP_ZONE:?GCP_ZONE must be set to the cluster zone, e.g. us-central1-a}"
-: "${BUCKET_NAME:?BUCKET_NAME must be set to a pre-existing GCS bucket for test volumes}"
-export BUCKET_NAME
 
 # ── Optional with defaults ────────────────────────────────────────────────────
 readonly KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
@@ -103,7 +101,6 @@ echo ""
 echo "Running GCS Fuse CSI driver conformance tests"
 echo "  Project        : ${GCP_PROJECT}"
 echo "  Zone           : ${GCP_ZONE}"
-echo "  Bucket         : ${BUCKET_NAME}"
 echo "  Focus          : ${GINKGO_FOCUS:-<all>}"
 echo "  Skip           : ${GINKGO_SKIP}"
 echo "  Native sidecar : ${TEST_WITH_NATIVE_SIDECAR}"
