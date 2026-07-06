@@ -133,10 +133,10 @@ func TestConformance(t *testing.T) {
 }
 
 var _ = ginkgo.Describe("Conformance Test Suite", func() {
-	// ossDriver uses a pre-existing GCS bucket (BUCKET_NAME env var) with
-	// per-test subdirectory isolation.  No Workload Identity or IAM setup
-	// needed — GCE node ADC handles GCS auth.
-	testDriver := initOSSDriver(bucketFromEnv())
+	// ossDriver creates a fresh GCS bucket per test namespace using the
+	// GCE node's ADC (Application Default Credentials) for bucket
+	// management.
+	testDriver := initOSSDriver(bucketFromEnv(), *project)
 
 	// Testsuites that exercise the core volume lifecycle including
 	// PreprovisionedPV, CSI ephemeral, and multi-volume patterns.

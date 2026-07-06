@@ -32,12 +32,15 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
 	"github.com/onsi/ginkgo/v2"
+	"google.golang.org/api/iterator"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +57,8 @@ const (
 	keySkipBucketCheck = "skipCSIBucketAccessCheck"
 	keyBucketName      = "bucketName"
 	keyMountOptions    = "mountOptions"
+	testBucketLocation = "us-central1"
+	implicitDirObject  = "implicit-dir/placeholder"
 )
 
 // ossTestVolume holds the per-test state.
@@ -70,6 +75,9 @@ func (v *ossTestVolume) DeleteVolume(_ context.Context) {}
 type ossDriver struct {
 	driverInfo storageframework.DriverInfo
 	bucket     string
+	gcsClient  *storage.Client
+	projectID  string
+	buckets    map[string]string // namespace -> per-test bucket name
 }
 
 // Compile-time interface checks.
@@ -77,9 +85,16 @@ var _ storageframework.TestDriver = &ossDriver{}
 var _ storageframework.PreprovisionedPVTestDriver = &ossDriver{}
 var _ storageframework.EphemeralTestDriver = &ossDriver{}
 
-func initOSSDriver(bucket string) storageframework.TestDriver {
+func initOSSDriver(bucket, projectID string) storageframework.TestDriver {
+	gcsClient, err := storage.NewClient(context.Background())
+	if err != nil {
+		ginkgo.Fail(fmt.Sprintf("failed to create GCS client: %v", err))
+	}
 	return &ossDriver{
-		bucket: bucket,
+		bucket:    bucket,
+		gcsClient: gcsClient,
+		projectID: projectID,
+		buckets:   map[string]string{},
 		driverInfo: storageframework.DriverInfo{
 			Name:            csiDriver,
 			SupportedFsType: sets.NewString(""),
@@ -122,9 +137,56 @@ func (d *ossDriver) PrepareTest(ctx context.Context, f *e2eframework.Framework) 
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		e2eframework.Failf("failed to create SA %s/%s: %v", f.Namespace.Name, serviceAccountName, err)
 	}
+
+	bucket := d.createBucket(ctx, f.Namespace.Name)
+	seedBucket(ctx, d.gcsClient, bucket)
+	d.buckets[f.Namespace.Name] = bucket
+	ginkgo.DeferCleanup(func(ctx context.Context) {
+		deleteBucket(ctx, d.gcsClient, bucket)
+	})
+
 	return &storageframework.PerTestConfig{
 		Driver:    d,
 		Framework: f,
+	}
+}
+
+// createBucket creates a per-test GCS bucket for the given namespace.
+func (d *ossDriver) createBucket(ctx context.Context, namespace string) string {
+	bucketName := fmt.Sprintf("%s-gcsfuse-test-%s-%s", d.projectID, namespace, uuid.NewString())
+	if err := d.gcsClient.Bucket(bucketName).Create(ctx, d.projectID, &storage.BucketAttrs{Location: testBucketLocation}); err != nil {
+		e2eframework.Failf("failed to create bucket %q: %v", bucketName, err)
+	}
+	return bucketName
+}
+
+// seedBucket writes a placeholder object so gcsfuse's --implicit-dirs option
+// sees implicit-dir as an existing directory from the start of the test.
+func seedBucket(ctx context.Context, client *storage.Client, bucket string) {
+	w := client.Bucket(bucket).Object(implicitDirObject).NewWriter(ctx)
+	if err := w.Close(); err != nil {
+		e2eframework.Failf("failed to seed bucket %q: %v", bucket, err)
+	}
+}
+
+// deleteBucket deletes all objects in the bucket, then the bucket itself.
+func deleteBucket(ctx context.Context, client *storage.Client, bucket string) {
+	it := client.Bucket(bucket).Objects(ctx, nil)
+	for {
+		obj, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			e2eframework.Logf("failed to list objects in bucket %q during cleanup: %v", bucket, err)
+			return
+		}
+		if err := client.Bucket(bucket).Object(obj.Name).Delete(ctx); err != nil {
+			e2eframework.Logf("failed to delete object %q in bucket %q: %v", obj.Name, bucket, err)
+		}
+	}
+	if err := client.Bucket(bucket).Delete(ctx); err != nil {
+		e2eframework.Logf("failed to delete bucket %q: %v", bucket, err)
 	}
 }
 
