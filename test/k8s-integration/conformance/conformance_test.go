@@ -139,31 +139,42 @@ var _ = ginkgo.Describe("Conformance Test Suite", func() {
 	// management.
 	testDriver := initOSSDriver(*project)
 
-	// All registered testsuites. Some assume a *specs.GCSFuseCSITestDriver
-	// (file_cache, gcsfuse_integration*) or GKE-only infrastructure (mount,
-	// failed_mount, workloads, oidc, profiles, metrics, istio, WIF) that
-	// ossDriver doesn't provide — those specs are expected to fail cleanly
-	// on a type assertion or missing setup rather than validate anything,
-	// but are included for visibility into exactly what breaks and how.
+	// All testsuites except the ones that crash the entire Ginkgo process
+	// during spec-tree construction rather than just failing their own specs.
+	//
+	// Excluded — DefineTests (or a function it calls unconditionally, not from
+	// inside an It/BeforeEach) hard-casts to *specs.GCSFuseCSITestDriver or
+	// otherwise panics before any leaf node exists to catch it, taking down
+	// every other suite registered in the same process:
+	//   - InitGcsFuseCSIGCSFuseIntegrationTestSuite,
+	//     InitGcsFuseCSIGCSFuseIntegrationFileCacheTestSuite,
+	//     InitGcsFuseCSIGCSFuseIntegrationFileCacheParallelDownloadsTestSuite:
+	//     generateDynamicTests/generateStaticTests call isConfigCompatible ->
+	//     hnsEnabled/zbEnabled/flatEnabled, which gomega.Expect-panics on cast
+	//     failure, at the end of DefineTests (unconditional, not in a closure).
+	//   - InitGcsFuseCSIFileCacheTestSuite, InitGcsFuseCSIMetricsTestSuite:
+	//     hard-cast with framework.Failf at the very top of DefineTests.
+	//   - InitGcsFuseCSIProfilesTestSuite: InitGcsFuseCSIProfilesTestSuite()
+	//     itself calls control.NewStorageControlClient + gomega.Expect before
+	//     DefineTests even runs, at suite-list construction time.
+	//
+	// Everything else below only does GCSFuseCSITestDriver-specific work
+	// inside closures invoked from It/BeforeEach (kernel_params, cloud_profiler,
+	// istio) or has no such dependency at all — a cast/assertion failure there
+	// only fails that one spec.
 	conformanceSuites := []func() storageframework.TestSuite{
 		testsuites.InitGcsFuseCSIVolumesTestSuite,
 		testsuites.InitGcsFuseCSIMultiVolumeTestSuite,
 		testsuites.InitGcsFuseCSISubPathTestSuite,
 		testsuites.InitGcsFuseCSICloudProfilerTestSuite,
 		testsuites.InitGcsFuseCSIFailedMountTestSuite,
-		testsuites.InitGcsFuseCSIGCSFuseIntegrationFileCacheParallelDownloadsTestSuite,
 		testsuites.InitGcsFuseCSIAutoTerminationTestSuite,
-		testsuites.InitGcsFuseCSIGCSFuseIntegrationTestSuite,
-		testsuites.InitGcsFuseCSIGCSFuseIntegrationFileCacheTestSuite,
-		testsuites.InitGcsFuseCSIFileCacheTestSuite,
 		testsuites.InitGcsFuseKernelParamsTestSuite,
 		testsuites.InitGcsFuseMountTestSuite,
 		testsuites.InitGcsFuseCSIIstioTestSuite,
 		testsuites.InitGcsFuseCSIMetadataPrefetchTestSuite,
-		testsuites.InitGcsFuseCSIMetricsTestSuite,
 		testsuites.InitGcsFuseCSIWorkloadsTestSuite,
 		testsuites.InitGcsFuseCSIOIDCTestSuite,
-		testsuites.InitGcsFuseCSIProfilesTestSuite,
 		testsuites.InitGcsFuseCSIPerformanceTestSuite,
 		testsuites.InitGcsFuseCSIWorkloadIdentityFederationTestSuite,
 	}
