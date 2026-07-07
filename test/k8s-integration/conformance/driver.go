@@ -365,7 +365,11 @@ func (d *ossDriver) GetVolume(config *storageframework.PerTestConfig, _ int) (ma
 }
 
 func mountOpts(readOnly, implicitDirs, nonRoot bool) string {
-	opts := "logging:severity:info"
+	// file-mode=755 grants the execute bit; gcsfuse's own default file-mode
+	// has no execute bit, which fails the upstream "should allow exec of
+	// files on the volume" test (files can be written but not chmod'd +
+	// executed).
+	opts := "logging:severity:info,file-mode=755"
 	if readOnly {
 		opts += ",ro"
 	}
