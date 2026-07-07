@@ -113,6 +113,15 @@ func initOSSDriver(projectID string) storageframework.TestDriver {
 				storageframework.CapExec:        true,
 				storageframework.CapMultiPODs:   true,
 				storageframework.CapRWX:         true,
+				// The driver declares VOLUME_MOUNT_GROUP at the CSI protocol
+				// level (pkg/csi_driver/gcs_fuse_driver.go), the real
+				// mechanism this capability exercises.
+				storageframework.CapFsGroup: true,
+				// The driver's declared access modes don't include
+				// SINGLE_NODE_SINGLE_WRITER/SINGLE_NODE_MULTI_WRITER (the
+				// modes RWOP needs), so this is expected to surface a real
+				// "unsupported access mode" failure rather than pass.
+				storageframework.CapReadWriteOncePod: true,
 			},
 			SupportedSizeRange: e2evolume.SizeRange{
 				Min: "1Ki",
